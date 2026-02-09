@@ -147,28 +147,28 @@ async function checkEnvironment() {
             html += "</div>";
         }
 
-        // ネットワークアダプタ情報
-        if (result.adapters.length > 0) {
-            html += "<h3>ネットワークアダプタ</h3>";
-            html += '<div class="adapter-list">';
-            result.adapters.forEach((adapter) => {
-                html += `<div class="adapter-item">`;
-                html += `<strong>${adapter.name}</strong><br>`;
-                html += `IPv4: ${adapter.has_ipv4 ? "あり" : "なし"}`;
-                if (adapter.has_ipv4_global) {
-                    html += " (グローバル)";
-                }
-                html += `<br>IPv6: ${adapter.has_ipv6 ? "あり" : "なし"}`;
-                if (adapter.has_ipv6_global) {
-                    html += " (グローバル)";
-                }
-                if (adapter.ip_addresses.length > 0) {
-                    html += `<br>IPアドレス: ${adapter.ip_addresses.join(", ")}`;
-                }
-                html += `</div>`;
-            });
-            html += "</div>";
-        }
+        // ネットワークアダプタ情報（UIから非表示）
+        // if (result.adapters.length > 0) {
+        //     html += "<h3>ネットワークアダプタ</h3>";
+        //     html += '<div class="adapter-list">';
+        //     result.adapters.forEach((adapter) => {
+        //         html += `<div class="adapter-item">`;
+        //         html += `<strong>${adapter.name}</strong><br>`;
+        //         html += `IPv4: ${adapter.has_ipv4 ? "あり" : "なし"}`;
+        //         if (adapter.has_ipv4_global) {
+        //             html += " (グローバル)";
+        //         }
+        //         html += `<br>IPv6: ${adapter.has_ipv6 ? "あり" : "なし"}`;
+        //         if (adapter.has_ipv6_global) {
+        //             html += " (グローバル)";
+        //         }
+        //         if (adapter.ip_addresses.length > 0) {
+        //             html += `<br>IPアドレス: ${adapter.ip_addresses.join(", ")}`;
+        //         }
+        //         html += `</div>`;
+        //     });
+        //     html += "</div>";
+        // }
 
         // エラーメッセージ
         if (result.error_messages.length > 0) {
