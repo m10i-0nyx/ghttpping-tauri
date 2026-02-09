@@ -3,6 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 use std::process::{Command, Stdio};
 use std::collections::HashMap;
+use url::Url;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkAdapter {
@@ -164,76 +165,88 @@ async fn ping_http(
     validate_url(&url)?;
 
     let start = Instant::now();
-    let parsed_url = match reqwest::Url::parse(&url) {
-        Ok(u) => u,
-        Err(e) => {
-            return Ok(HttpPingResult {
-                url: url.clone(),
-                ip_address: None,
-                status_code: None,
-                response_time_ms: None,
-                success: false,
-                error_message: Some(format!("無効なURL: {}", e)),
-            });
-        }
-    };
 
-    let client = if ignore_tls_errors {
-        reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .timeout(Duration::from_secs(30))
-            .build()
-    } else {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-    };
+    // curl.exeを使用してHTTP接続
+    let mut cmd_args = vec![
+        "-s".to_string(),
+        "-o".to_string(),
+        "nul".to_string(),
+        "-w".to_string(),
+        "%{http_code}".to_string(),
+        "-m".to_string(),
+        "30".to_string(),
+    ];
 
-    let client = match client {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(HttpPingResult {
-                url: url.clone(),
-                ip_address: None,
-                status_code: None,
-                response_time_ms: None,
-                success: false,
-                error_message: Some(format!("HTTPクライアント作成失敗: {}", e)),
-            });
-        }
-    };
+    if ignore_tls_errors {
+        cmd_args.push("-k".to_string());
+    }
 
-    let response = match client.get(parsed_url.as_str()).send().await {
-        Ok(resp) => resp,
-        Err(e) => {
-            let elapsed = start.elapsed().as_millis() as u64;
-            return Ok(HttpPingResult {
-                url: url.clone(),
-                ip_address: None,
-                status_code: None,
-                response_time_ms: Some(elapsed),
-                success: false,
-                error_message: Some(format!("接続エラー: {}", e)),
-            });
-        }
-    };
+    cmd_args.push(url.clone());
+
+    let output = Command::new("curl.exe")
+        .args(&cmd_args)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .output();
 
     let elapsed = start.elapsed().as_millis() as u64;
-    let status_code = response.status().as_u16();
-    let success = response.status().is_success();
 
-    Ok(HttpPingResult {
-        url,
-        ip_address: None,
-        status_code: Some(status_code),
-        response_time_ms: Some(elapsed),
-        success,
-        error_message: if success {
-            None
-        } else {
-            Some(format!("HTTPステータス: {}", status_code))
-        },
-    })
+    match output {
+        Ok(output) => {
+            let status_code_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+            if output.status.success() && !status_code_str.is_empty() {
+                if let Ok(status_code) = status_code_str.parse::<u16>() {
+                    let success = status_code >= 200 && status_code < 300;
+                    Ok(HttpPingResult {
+                        url,
+                        ip_address: None,
+                        status_code: Some(status_code),
+                        response_time_ms: Some(elapsed),
+                        success,
+                        error_message: if success {
+                            None
+                        } else {
+                            Some(format!("HTTPステータス: {}", status_code))
+                        },
+                    })
+                } else {
+                    Ok(HttpPingResult {
+                        url,
+                        ip_address: None,
+                        status_code: None,
+                        response_time_ms: Some(elapsed),
+                        success: false,
+                        error_message: Some(format!("ステータスコード解析失敗: {}", status_code_str)),
+                    })
+                }
+            } else {
+                let error_msg = if !stderr_str.is_empty() {
+                    stderr_str
+                } else {
+                    format!("curl 終了コード: {}", output.status.code().unwrap_or(-1))
+                };
+
+                Ok(HttpPingResult {
+                    url,
+                    ip_address: None,
+                    status_code: None,
+                    response_time_ms: Some(elapsed),
+                    success: false,
+                    error_message: Some(format!("接続エラー: {}", error_msg)),
+                })
+            }
+        }
+        Err(e) => Ok(HttpPingResult {
+            url,
+            ip_address: None,
+            status_code: None,
+            response_time_ms: Some(elapsed),
+            success: false,
+            error_message: Some(format!("curl 実行失敗: {}", e)),
+        }),
+    }
 }
 
 #[tauri::command]
@@ -247,7 +260,7 @@ async fn ping_http_dual(
 
     validate_url(&url)?;
 
-    let parsed_url = match reqwest::Url::parse(&url) {
+    let parsed_url = match Url::parse(&url) {
         Ok(u) => u,
         Err(e) => return Err(format!("無効なURL: {}", e)),
     };
