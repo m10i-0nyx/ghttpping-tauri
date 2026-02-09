@@ -103,25 +103,18 @@ ghttpping-tauri/
 │   └── build.rs
 ├── index.html
 ├── package.json
-├─**OS操作の厳格な分離** - すべてのOS操作（ネットワーク診断、HTTP通信）はRust側で実行
+├── pnpm-lock.yaml
+```
+
+## セキュリティ
+
+- **OS操作の厳格な分離** - すべてのOS操作（ネットワーク診断、HTTP通信）はRust側で実行
 - **TypeScriptからのコマンド実行禁止** - TypeScriptから直接OSコマンドを実行しない
 - **Tauri allowlistの最小化** - 必要最小限の権限のみを使用
 - **明示的な証明書検証制御** - TLS証明書検証の無効化は利用者の明示的な操作でのみ可能
 - **ネットワーク通信の透明化** - DNS解決結果や接続IPアドレスを明示的に表示
-## セキュリティ
 
-- OS操作は全てRust側で実行
-- TypeScriptから直接OSコマンドを実行しない
-- Tauri allowlistを最小化
-- 証明書検証の無効化は明示的な操作でのみ可能
-主な Tauri Commands
-
-利用可能な Tauri Commands：
-
-- `environment_check()` - 環境チェックを実行
-- `ping_http_dual(url: string, ignoreTlsErrors: boolean)` - HTTP/HTTPSのIPv4/IPv6デュアルテスト
-- `resolve_dns(domain: string)` - DNS名前解決
-
+## 開発者向けガイド
 ### Frontend から Tauri Command を呼び出し
 
 ```typescript
