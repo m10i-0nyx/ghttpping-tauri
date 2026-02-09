@@ -4,6 +4,7 @@ use std::time::Instant;
 use std::process::{Command, Stdio};
 use std::collections::HashMap;
 use url::Url;
+use encoding_rs::SHIFT_JIS;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -121,7 +122,10 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
         }
         Err(e) => {
             result.ipv6_connectivity = false;
-            result.error_messages.push(format!("IPv6グローバルIP取得に失敗: {}", e));
+            // IPv4が成功している場合は、IPv6エラーを表示しない
+            if !result.ipv4_connectivity {
+                result.error_messages.push(format!("IPv6グローバルIP取得に失敗: {}", e));
+            }
         }
     }
 
@@ -137,15 +141,25 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
         }
     }
 
-    // DNSサーバ情報の取得
-    match get_dns_servers() {
-        Ok(dns_info) => {
+    // DNSサーバ情報の取得（タイムアウト付き）
+    match tokio::time::timeout(
+        tokio::time::Duration::from_secs(5),
+        get_dns_servers_async(),
+    )
+    .await
+    {
+        Ok(Ok(dns_info)) => {
             result.dns_servers = dns_info;
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             result
                 .error_messages
                 .push(format!("DNSサーバ情報取得に失敗: {}", e));
+        }
+        Err(_) => {
+            result
+                .error_messages
+                .push("DNSサーバ情報取得がタイムアウトしました".to_string());
         }
     }
 
@@ -537,7 +551,7 @@ fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
         return Err("ネットワークアダプタの取得に失敗しました".to_string());
     }
 
-    let adapter_names = String::from_utf8_lossy(&output.stdout);
+    let adapter_names = decode_command_output(&output.stdout);
     let mut adapters = Vec::new();
 
     for name in adapter_names.lines() {
@@ -574,7 +588,7 @@ fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
             .output();
 
         if let Ok(ip_out) = ip_output {
-            let ip_addresses: Vec<String> = String::from_utf8_lossy(&ip_out.stdout)
+            let ip_addresses: Vec<String> = decode_command_output(&ip_out.stdout)
                 .lines()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty() && is_valid_ip_address(s))
@@ -704,13 +718,45 @@ async fn check_dns_resolution() -> Result<bool, String> {
     }
 }
 
-// DNS サーバ情報の取得
+// DNS サーバ情報の取得（非同期版）
+async fn get_dns_servers_async() -> Result<Vec<DnsServerInfo>, String> {
+    // ipconfig /all を優先的に使用（最も確実）
+    match tokio::task::spawn_blocking(parse_dns_from_ipconfig_blocking).await {
+        Ok(Ok(result)) if !result.is_empty() => return Ok(result),
+        _ => {}
+    }
+
+    // PowerShell を別スレッドで実行
+    match tokio::task::spawn_blocking(get_dns_servers_from_powershell_blocking).await {
+        Ok(result) => result,
+        Err(_) => Err("DNSサーバ取得スレッドエラー".to_string()),
+    }
+}
+
+// DNS サーバ情報の取得（互換性のための同期版）
 fn get_dns_servers() -> Result<Vec<DnsServerInfo>, String> {
     // ipconfig /all を優先的に使用（最も確実）
     match parse_dns_from_ipconfig() {
         Ok(result) if !result.is_empty() => Ok(result),
         _ => get_dns_servers_from_powershell(),
     }
+}
+
+// PowerShellのエンコーディングを指定してUTF-8として出力を取得する
+fn decode_command_output(bytes: &[u8]) -> String {
+    // Shift-JISとしてデコードを試みる
+    let (cow, _, _) = SHIFT_JIS.decode(bytes);
+    cow.to_string()
+}
+
+// parse_dns_from_ipconfig のブロッキング版
+fn parse_dns_from_ipconfig_blocking() -> Result<Vec<DnsServerInfo>, String> {
+    parse_dns_from_ipconfig()
+}
+
+// get_dns_servers_from_powershell のブロッキング版
+fn get_dns_servers_from_powershell_blocking() -> Result<Vec<DnsServerInfo>, String> {
+    get_dns_servers_from_powershell()
 }
 
 // PowerShell を使用して DNS サーバ情報を取得
@@ -743,7 +789,7 @@ fn get_dns_servers_from_powershell() -> Result<Vec<DnsServerInfo>, String> {
         return Err("DNSサーバ情報の取得に失敗しました".to_string());
     }
 
-    let output_str = String::from_utf8_lossy(&output.stdout);
+    let output_str = decode_command_output(&output.stdout);
     let mut result = Vec::new();
     let mut current_adapter_map: HashMap<String, (Vec<String>, Vec<String>)> = HashMap::new();
 
@@ -812,7 +858,7 @@ fn parse_dns_from_ipconfig() -> Result<Vec<DnsServerInfo>, String> {
         return Err("DNS サーバ情報の取得に失敗しました".to_string());
     }
 
-    let output_str = String::from_utf8_lossy(&output.stdout);
+    let output_str = decode_command_output(&output.stdout);
     let mut result = Vec::new();
     let mut current_adapter: Option<String> = None;
     let mut current_ipv4_dns: Vec<String> = Vec::new();
