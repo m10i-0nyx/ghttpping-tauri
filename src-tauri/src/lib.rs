@@ -19,6 +19,13 @@ pub struct GlobalIPInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct DnsServerInfo {
+    pub interface_alias: String,
+    pub ipv4_dns_servers: Vec<String>,
+    pub ipv6_dns_servers: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EnvironmentCheckResult {
     pub adapters: Vec<NetworkAdapter>,
     pub ipv4_connectivity: bool,
@@ -27,6 +34,7 @@ pub struct EnvironmentCheckResult {
     pub internet_available: bool,
     pub ipv4_global_ip: Option<GlobalIPInfo>,
     pub ipv6_global_ip: Option<GlobalIPInfo>,
+    pub dns_servers: Vec<DnsServerInfo>,
     pub error_messages: Vec<String>,
 }
 
@@ -64,6 +72,7 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
         internet_available: false,
         ipv4_global_ip: None,
         ipv6_global_ip: None,
+        dns_servers: vec![],
         error_messages: vec![],
     };
 
@@ -112,6 +121,18 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
             result
                 .error_messages
                 .push(format!("DNS解決確認に失敗: {}", e));
+        }
+    }
+
+    // DNSサーバ情報の取得
+    match get_dns_servers() {
+        Ok(dns_info) => {
+            result.dns_servers = dns_info;
+        }
+        Err(e) => {
+            result
+                .error_messages
+                .push(format!("DNSサーバ情報取得に失敗: {}", e));
         }
     }
 
@@ -575,6 +596,209 @@ async fn check_dns_resolution() -> Result<bool, String> {
         Ok(mut addrs) => Ok(addrs.next().is_some()),
         Err(_) => Ok(false),
     }
+}
+
+// DNSサーバ情報を取得
+fn get_dns_servers() -> Result<Vec<DnsServerInfo>, String> {
+    // 最初に ipconfig /all を試す（最も確実）
+    match parse_dns_from_ipconfig() {
+        Ok(result) if !result.is_empty() => {
+            return Ok(result);
+        }
+        _ => {
+            // ipconfig で失敗した場合、PowerShell を試す
+            return get_dns_servers_from_powershell();
+        }
+    }
+}
+
+// PowerShell を使用して DNS サーバ情報を取得
+fn get_dns_servers_from_powershell() -> Result<Vec<DnsServerInfo>, String> {
+    use std::process::Command;
+
+    // Get-NetAdapter で取得してから、各アダプタの DNS を取得
+    let ps_command = r#"Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | ForEach-Object {
+        $iface = $_.Name
+        Get-DnsClientServerAddress -InterfaceAlias $iface -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ServerAddresses | ForEach-Object { "$iface : $_" }
+    }"#;
+
+    let output = Command::new("powershell")
+        .args(&["-Command", ps_command])
+        .output()
+        .map_err(|e| format!("PowerShellコマンド実行失敗: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("DNS サーバ取得 PowerShell エラー: {}", stderr);
+        return Err("DNSサーバ情報の取得に失敗しました".to_string());
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let mut result = Vec::new();
+    let mut current_adapter_map: std::collections::HashMap<String, (Vec<String>, Vec<String>)> =
+        std::collections::HashMap::new();
+
+    // 出力をパース: "InterfaceName : IP_Address" 形式
+    for line in output_str.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(sep_pos) = line.find(" : ") {
+            let adapter_name = line[..sep_pos].trim().to_string();
+            let ip_addr = line[sep_pos + 3..].trim().to_string();
+
+            if is_ip_address_like(&ip_addr) {
+                let entry = current_adapter_map
+                    .entry(adapter_name)
+                    .or_insert_with(|| (Vec::new(), Vec::new()));
+
+                let colon_count = ip_addr.matches(':').count();
+                if colon_count > 1 {
+                    entry.1.push(ip_addr);
+                } else if ip_addr.contains('.') {
+                    entry.0.push(ip_addr);
+                }
+            }
+        }
+    }
+
+    // HashMap を DnsServerInfo に変換
+    for (adapter_name, (ipv4_addrs, ipv6_addrs)) in current_adapter_map {
+        if !ipv4_addrs.is_empty() || !ipv6_addrs.is_empty() {
+            result.push(DnsServerInfo {
+                interface_alias: adapter_name,
+                ipv4_dns_servers: ipv4_addrs,
+                ipv6_dns_servers: ipv6_addrs,
+            });
+        }
+    }
+
+    if result.is_empty() {
+        return Err("PowerShell から DNS 情報を取得できませんでした".to_string());
+    }
+
+    Ok(result)
+}
+
+// フォールバック: ipconfig /all から DNS サーバ情報を取得
+fn parse_dns_from_ipconfig() -> Result<Vec<DnsServerInfo>, String> {
+    use std::process::Command;
+
+    let output = Command::new("ipconfig")
+        .args(&["/all"])
+        .output()
+        .map_err(|e| format!("ipconfig コマンド実行失敗: {}", e))?;
+
+    if !output.status.success() {
+        return Err("DNS サーバ情報の取得に失敗しました".to_string());
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let mut result = Vec::new();
+    let mut current_adapter: Option<String> = None;
+    let mut current_ipv4_dns: Vec<String> = Vec::new();
+    let mut current_ipv6_dns: Vec<String> = Vec::new();
+
+    for line in output_str.lines() {
+        let line_lower = line.to_lowercase();
+        let trimmed = line.trim();
+
+        // アダプタ行の検出
+        // 行頭にスペースがなく、「アダプター」または「adapter」を含み、「:」を含む行
+        if !line.starts_with(' ')
+            && !line.is_empty()
+            && (line_lower.contains("アダプター") || line_lower.contains("adapter"))
+            && line.contains(':')
+        {
+            // 前のアダプタ情報を保存
+            if let Some(adapter_name) = current_adapter.take() {
+                if !current_ipv4_dns.is_empty() || !current_ipv6_dns.is_empty() {
+                    result.push(DnsServerInfo {
+                        interface_alias: adapter_name,
+                        ipv4_dns_servers: current_ipv4_dns.clone(),
+                        ipv6_dns_servers: current_ipv6_dns.clone(),
+                    });
+                }
+            }
+
+            // 新しいアダプタ情報を抽出
+            if let Some(pos) = line.find(':') {
+                let adapter_name = line[..pos].trim().to_string();
+                // "イーサネット アダプター xxx:" 形式から "xxx" を抽出
+                // または "Ethernet adapter xxx:" 形式から "xxx" を抽出
+                let extracted_name = if let Some(name_start) = adapter_name.to_lowercase().find("アダプター ") {
+                    adapter_name[name_start + 5..].to_string() // "アダプター " は5文字
+                } else if let Some(name_start) = adapter_name.to_lowercase().find("adapter ") {
+                    adapter_name[name_start + 8..].to_string()
+                } else {
+                    adapter_name
+                };
+
+                current_adapter = Some(extracted_name);
+                current_ipv4_dns.clear();
+                current_ipv6_dns.clear();
+            }
+        } else if current_adapter.is_some() && (line_lower.contains("dns サーバー") || line_lower.contains("dns servers")) && line.contains(':') {
+            // DNS サーバー行
+            if let Some(pos) = line.find(':') {
+                let dns_part = line[pos + 1..].trim();
+                if !dns_part.is_empty() && is_ip_address_like(dns_part) {
+                    let colon_count = dns_part.matches(':').count();
+                    if colon_count > 1 {
+                        // IPv6
+                        current_ipv6_dns.push(dns_part.to_string());
+                    } else if dns_part.contains('.') {
+                        // IPv4
+                        current_ipv4_dns.push(dns_part.to_string());
+                    }
+                }
+            }
+        } else if current_adapter.is_some() && line.starts_with(' ') && !trimmed.is_empty() {
+            // DNS サーバーの継続行（インデント付き）
+            // ただし「. . . .」が含まれていない行のみ（属性行ではない）
+            if !line.contains(" . ") && is_ip_address_like(trimmed) {
+                let colon_count = trimmed.matches(':').count();
+                if colon_count > 1 {
+                    // IPv6
+                    if !current_ipv6_dns.contains(&trimmed.to_string()) {
+                        current_ipv6_dns.push(trimmed.to_string());
+                    }
+                } else if trimmed.contains('.') {
+                    // IPv4
+                    if !current_ipv4_dns.contains(&trimmed.to_string()) {
+                        current_ipv4_dns.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // 最後のアダプタの情報を保存
+    if let Some(adapter_name) = current_adapter {
+        if !current_ipv4_dns.is_empty() || !current_ipv6_dns.is_empty() {
+            result.push(DnsServerInfo {
+                interface_alias: adapter_name,
+                ipv4_dns_servers: current_ipv4_dns,
+                ipv6_dns_servers: current_ipv6_dns,
+            });
+        }
+    }
+
+    Ok(result)
+}
+
+// IP アドレスのようなパターンかどうかを判定
+fn is_ip_address_like(s: &str) -> bool {
+    // IPv4: 3つ以上のドット + 数字
+    // IPv6: 2つ以上のコロン + 16進数
+    let dot_count = s.matches('.').count();
+    let colon_count = s.matches(':').count();
+    let has_hex = s.chars().any(|c| c.is_ascii_hexdigit());
+    let has_digit = s.chars().any(|c| c.is_ascii_digit());
+
+    (dot_count >= 3 && has_digit) || (colon_count >= 2 && has_hex)
 }
 
 // グローバルIPv4情報の取得

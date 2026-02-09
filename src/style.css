@@ -286,6 +286,42 @@ main {
     font-size: 0.85rem;
 }
 
+.dns-server-info {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.dns-adapter-item {
+    background: #f3e5f5;
+    padding: 12px;
+    border-radius: 4px;
+    border: 1px solid #ce93d8;
+    border-left: 4px solid #9c27b0;
+}
+
+.dns-adapter-item strong {
+    color: #6a1b9a;
+    display: block;
+    margin-bottom: 8px;
+}
+
+.dns-ipv4,
+.dns-ipv6 {
+    margin-bottom: 8px;
+    font-size: 0.95rem;
+}
+
+.dns-ipv4 u,
+.dns-ipv6 u {
+    color: #5e35b1;
+    font-weight: 600;
+}
+
+.dns-adapter-item .dns-ipv6 {
+    margin-bottom: 0;
+}
+
 .help-text {
     margin-top: 10px;
     font-size: 0.9rem;

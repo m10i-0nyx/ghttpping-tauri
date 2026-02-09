@@ -14,6 +14,12 @@ interface GlobalIPInfo {
     datetime_jst: string;
 }
 
+interface DnsServerInfo {
+    interface_alias: string;
+    ipv4_dns_servers: string[];
+    ipv6_dns_servers: string[];
+}
+
 interface EnvironmentCheckResult {
     adapters: NetworkAdapter[];
     ipv4_connectivity: boolean;
@@ -22,6 +28,7 @@ interface EnvironmentCheckResult {
     internet_available: boolean;
     ipv4_global_ip?: GlobalIPInfo;
     ipv6_global_ip?: GlobalIPInfo;
+    dns_servers: DnsServerInfo[];
     error_messages: string[];
 }
 
@@ -147,6 +154,43 @@ async function checkEnvironment() {
             html += "</div>";
         }
 
+        // DNSサーバ情報
+        if (result.dns_servers.length > 0) {
+            html += "<h3>DNSサーバ設定</h3>";
+            html += '<div class="dns-server-info">';
+
+            result.dns_servers.forEach((dns) => {
+                if (dns.ipv4_dns_servers.length > 0 || dns.ipv6_dns_servers.length > 0) {
+                    html += `<div class="dns-adapter-item">`;
+                    html += `<strong>${dns.interface_alias}</strong><br>`;
+
+                    if (dns.ipv4_dns_servers.length > 0) {
+                        html += `<div class="dns-ipv4">`;
+                        html += `<u>IPv4 DNSサーバ:</u><br>`;
+                        dns.ipv4_dns_servers.forEach((server, idx) => {
+                            const label = idx === 0 ? "Primary" : idx === 1 ? "Secondary" : `(${idx + 1})`;
+                            html += `&nbsp;&nbsp;${label}: ${server}<br>`;
+                        });
+                        html += `</div>`;
+                    }
+
+                    if (dns.ipv6_dns_servers.length > 0) {
+                        html += `<div class="dns-ipv6">`;
+                        html += `<u>IPv6 DNSサーバ:</u><br>`;
+                        dns.ipv6_dns_servers.forEach((server, idx) => {
+                            const label = idx === 0 ? "Primary" : idx === 1 ? "Secondary" : `(${idx + 1})`;
+                            html += `&nbsp;&nbsp;${label}: ${server}<br>`;
+                        });
+                        html += `</div>`;
+                    }
+
+                    html += `</div>`;
+                }
+            });
+
+            html += "</div>";
+        }
+
         // ネットワークアダプタ情報（UIから非表示）
         // if (result.adapters.length > 0) {
         //     html += "<h3>ネットワークアダプタ</h3>";
@@ -233,7 +277,7 @@ async function performHttpPing() {
         }
 
         // DNS解決結果
-        html += "<h3>📍 DNS名前解決結果</h3>";
+        html += "<h3>🔍 DNS名前解決結果</h3>";
         html += "<div style='background: #f9f9f9; padding: 10px; border-radius: 4px; margin-bottom: 15px;'>";
         html += "<div style='display: grid; grid-template-columns: 1fr 1fr; gap: 15px;'>";
 
