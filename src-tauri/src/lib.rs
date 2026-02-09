@@ -552,6 +552,7 @@ fn is_global_ipv6(ip: &Ipv6Addr) -> bool {
 }
 
 // IPv4/IPv6接続確認（汎用関数）
+#[allow(dead_code)]
 async fn check_connectivity(url: &str, timeout_secs: u64) -> Result<bool, String> {
     let output = Command::new("curl.exe")
         .args(&[
