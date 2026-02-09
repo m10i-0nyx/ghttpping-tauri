@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 
 interface NetworkAdapter {
     name: string;
@@ -61,7 +63,7 @@ let environmentCheckCompleted: boolean = false;
 window.addEventListener("DOMContentLoaded", () => {
     const checkEnvBtn = document.getElementById("check-env-btn");
     const pingBtn = document.getElementById("ping-btn");
-    const mailtoBtn = document.getElementById("mailto-btn");
+    const saveResultBtn = document.getElementById("save-result-btn");
     const urlInput = document.getElementById("url-input") as HTMLInputElement;
 
     if (checkEnvBtn) {
@@ -74,8 +76,8 @@ window.addEventListener("DOMContentLoaded", () => {
         updatePingButtonState();
     }
 
-    if (mailtoBtn) {
-        mailtoBtn.addEventListener("click", sendMailto);
+    if (saveResultBtn) {
+        saveResultBtn.addEventListener("click", saveResultAsTextFile);
     }
 
     // Enterキーでも実行可能に
@@ -237,7 +239,7 @@ async function checkEnvironment() {
 async function performHttpPing() {
     const urlInput = document.getElementById("url-input") as HTMLInputElement;
     const resultDiv = document.getElementById("ping-result");
-    const mailtoBtn = document.getElementById("mailto-btn");
+    const saveResultBtn = document.getElementById("save-result-btn");
 
     if (!urlInput || !resultDiv) return;
 
@@ -361,17 +363,17 @@ async function performHttpPing() {
 
         resultDiv.innerHTML = html;
 
-        // メール送信ボタンを有効化
-        if (mailtoBtn) {
-            mailtoBtn.removeAttribute("disabled");
+        // ファイル保存ボタンを有効化
+        if (saveResultBtn) {
+            saveResultBtn.removeAttribute("disabled");
         }
     } catch (error) {
         resultDiv.innerHTML = `<div class="error">エラーが発生しました: ${error}</div>`;
     }
 }
 
-// 結果をメールで送信
-function sendMailto() {
+// 結果をテキストファイルに保存
+async function saveResultAsTextFile() {
     let body = "=== ghttpping 疎通確認結果 ===\n\n";
 
     if (lastEnvResult) {
@@ -381,15 +383,67 @@ function sendMailto() {
         body += `IPv6接続: ${lastEnvResult.ipv6_connectivity ? "あり" : "なし"}\n`;
         body += `DNS解決: ${lastEnvResult.dns_resolution ? "可能" : "不可"}\n\n`;
 
+        // グローバルIPアドレス情報
+        if (lastEnvResult.ipv4_global_ip || lastEnvResult.ipv6_global_ip) {
+            body += "【グローバルIPアドレス】\n";
+            if (lastEnvResult.ipv4_global_ip) {
+                body += `IPv4: ${lastEnvResult.ipv4_global_ip.client_host}\n`;
+                body += `  (取得時刻: ${lastEnvResult.ipv4_global_ip.datetime_jst})\n`;
+            }
+            if (lastEnvResult.ipv6_global_ip) {
+                body += `IPv6: ${lastEnvResult.ipv6_global_ip.client_host}\n`;
+                body += `  (取得時刻: ${lastEnvResult.ipv6_global_ip.datetime_jst})\n`;
+            }
+            body += "\n";
+        }
+
+        // ネットワークアダプタ情報
         if (lastEnvResult.adapters.length > 0) {
-            body += "ネットワークアダプタ:\n";
+            body += "【ネットワークアダプタ】\n";
             lastEnvResult.adapters.forEach((adapter) => {
                 body += `  - ${adapter.name}\n`;
                 body += `    IPv4: ${adapter.has_ipv4 ? "あり" : "なし"}`;
                 if (adapter.has_ipv4_global) body += " (グローバル)";
                 body += `\n    IPv6: ${adapter.has_ipv6 ? "あり" : "なし"}`;
                 if (adapter.has_ipv6_global) body += " (グローバル)";
+                if (adapter.ip_addresses.length > 0) {
+                    body += `\n    IPアドレス: ${adapter.ip_addresses.join(", ")}`;
+                }
                 body += "\n";
+            });
+            body += "\n";
+        }
+
+        // DNSサーバー情報
+        if (lastEnvResult.dns_servers.length > 0) {
+            body += "【DNSサーバ設定】\n";
+            lastEnvResult.dns_servers.forEach((dns) => {
+                if (dns.ipv4_dns_servers.length > 0 || dns.ipv6_dns_servers.length > 0) {
+                    body += `  ${dns.interface_alias}\n`;
+                    if (dns.ipv4_dns_servers.length > 0) {
+                        body += `    IPv4 DNSサーバ:\n`;
+                        dns.ipv4_dns_servers.forEach((server, idx) => {
+                            const label = idx === 0 ? "Primary" : idx === 1 ? "Secondary" : `(${idx + 1})`;
+                            body += `      ${label}: ${server}\n`;
+                        });
+                    }
+                    if (dns.ipv6_dns_servers.length > 0) {
+                        body += `    IPv6 DNSサーバ:\n`;
+                        dns.ipv6_dns_servers.forEach((server, idx) => {
+                            const label = idx === 0 ? "Primary" : idx === 1 ? "Secondary" : `(${idx + 1})`;
+                            body += `      ${label}: ${server}\n`;
+                        });
+                    }
+                }
+            });
+            body += "\n";
+        }
+
+        // エラーメッセージ
+        if (lastEnvResult.error_messages.length > 0) {
+            body += "【エラー・警告】\n";
+            lastEnvResult.error_messages.forEach((msg) => {
+                body += `  - ${msg}\n`;
             });
             body += "\n";
         }
@@ -444,10 +498,36 @@ function sendMailto() {
         }
     }
 
-    const subject = "ghttpping 疎通確認結果";
-    const mailtoLink = `mailto:?subject=${encodeURIComponent(
-        subject
-    )}&body=${encodeURIComponent(body)}`;
+    try {
+        // ファイル保存ダイアログを開く
+        const filePath = await save({
+            filters: [
+                {
+                    name: "Text",
+                    extensions: ["txt"],
+                },
+            ],
+            defaultPath: `ghttpping_result_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5)}.txt`,
+        });
 
-    window.location.href = mailtoLink;
+        console.log("Dialog result:", filePath);
+
+        if (filePath) {
+            console.log("Saving to:", filePath);
+            try {
+                // テキストファイルを保存
+                await writeTextFile(filePath, body);
+                console.log("File saved successfully");
+                alert("ファイルを保存しました:\n" + filePath);
+            } catch (writeError) {
+                console.error("Write error:", writeError);
+                alert(`ファイル保存エラー: ${writeError}`);
+            }
+        } else {
+            console.log("Dialog was cancelled");
+        }
+    } catch (error) {
+        console.error("Save dialog error:", error);
+        alert(`ダイアログエラー: ${error}`);
+    }
 }

@@ -1,0 +1,12 @@
+{
+    "default": {
+        "permissions": [
+            "core:default",
+            "dialog:allow-save",
+            "dialog:allow-open",
+            "dialog:allow-message",
+            "fs:allow-write",
+            "fs:allow-read"
+        ]
+    }
+}

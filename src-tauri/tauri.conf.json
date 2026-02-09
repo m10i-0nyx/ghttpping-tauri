@@ -12,7 +12,7 @@
     "app": {
         "windows": [
             {
-                "title": "ghttpping - HTTP/HTTPS疎通確認ツール",
+                "title": "ghttpping-tauri - HTTP/HTTPS疎通確認ツール",
                 "width": 900,
                 "height": 700,
                 "resizable": true,

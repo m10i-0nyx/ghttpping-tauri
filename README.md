@@ -19,7 +19,7 @@ Windows上でHTTP/HTTPSの疎通確認および遅延測定を行うGUIアプリ
 ## 前提条件
 
 - Windows 11
-- Node.js (v18以上)
+- Node.js (v24以上)
 - pnpm
 - Rust (1.70以上)
 - Tauri CLI
@@ -148,15 +148,7 @@ pnpm install --force
 - ファイアウォール設定を確認
 - ネットワーク接続を確認
 
-## 今後の改善予定
-
-- [ ] TLS証明書の詳細情報取得の完全実装
-- [ ] 複数URLの一括チェック機能
-- [ ] 結果のエクスポート（CSV、JSON）
-- [ ] 定期実行機能
-
 ---
 
-© 2026 ghttpping-windows
-
+## 参考リンク
 - [Tauri Documentation](https://tauri.app/)

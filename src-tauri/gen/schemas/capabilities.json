@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default capability for file operations and dialogs","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-save","dialog:allow-open","dialog:allow-message","fs:allow-write-text-file","fs:allow-read","fs:allow-exists","fs:allow-mkdir"]}}
