@@ -25,6 +25,7 @@ pub struct EnvironmentCheckResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpPingResult {
     pub url: String,
+    pub ip_address: Option<String>,
     pub status_code: Option<u16>,
     pub response_time_ms: Option<u64>,
     pub success: bool,
@@ -32,8 +33,15 @@ pub struct HttpPingResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct DnsResolution {
+    pub ipv4_addresses: Vec<String>,
+    pub ipv6_addresses: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HttpPingDualResult {
     pub url: String,
+    pub dns_resolution: DnsResolution,
     pub ipv4: HttpPingResult,
     pub ipv6: HttpPingResult,
 }
@@ -117,6 +125,7 @@ async fn ping_http(
         Err(e) => {
             return Ok(HttpPingResult {
                 url: url.clone(),
+                ip_address: None,
                 status_code: None,
                 response_time_ms: None,
                 success: false,
@@ -142,6 +151,7 @@ async fn ping_http(
         Err(e) => {
             return Ok(HttpPingResult {
                 url: url.clone(),
+                ip_address: None,
                 status_code: None,
                 response_time_ms: None,
                 success: false,
@@ -157,6 +167,7 @@ async fn ping_http(
             let elapsed = start.elapsed().as_millis() as u64;
             return Ok(HttpPingResult {
                 url: url.clone(),
+                ip_address: None,
                 status_code: None,
                 response_time_ms: Some(elapsed),
                 success: false,
@@ -171,6 +182,7 @@ async fn ping_http(
 
     Ok(HttpPingResult {
         url: url.clone(),
+        ip_address: None,
         status_code: Some(status_code),
         response_time_ms: Some(elapsed),
         success,
@@ -187,93 +199,189 @@ async fn ping_http_dual(
     url: String,
     ignore_tls_errors: bool,
 ) -> Result<HttpPingDualResult, String> {
-    // IPv4 限定テスト
-    let ipv4_result = ping_http_with_ip_version(url.clone(), ignore_tls_errors, 4).await;
+    // URLの検証
+    let parsed_url = match reqwest::Url::parse(&url) {
+        Ok(u) => u,
+        Err(e) => {
+            return Err(format!("無効なURL: {}", e));
+        }
+    };
 
-    // IPv6 限定テスト
-    let ipv6_result = ping_http_with_ip_version(url.clone(), ignore_tls_errors, 6).await;
+    let host = match parsed_url.host_str() {
+        Some(h) => h,
+        None => return Err("URLからホスト名を抽出できません".to_string()),
+    };
+
+    // ステップ1: DNS名前解決 (IPv4とIPv6)
+    let dns_result = resolve_dns(host).await;
+    let ipv4_addresses = dns_result.ipv4_addresses.clone();
+    let ipv6_addresses = dns_result.ipv6_addresses.clone();
+
+    // ステップ2: IPv4アドレスへのHTTP接続
+    let ipv4_result = if !ipv4_addresses.is_empty() {
+        connect_to_ip_with_host(
+            url.clone(),
+            &ipv4_addresses[0],
+            host,
+            ignore_tls_errors,
+            parsed_url.port(),
+        )
+        .await
+    } else {
+        HttpPingResult {
+            url: url.clone(),
+            ip_address: None,
+            status_code: None,
+            response_time_ms: None,
+            success: false,
+            error_message: Some("IPv4アドレスが見つかりません".to_string()),
+        }
+    };
+
+    // ステップ3: IPv6アドレスへのHTTP接続
+    let ipv6_result = if !ipv6_addresses.is_empty() {
+        connect_to_ip_with_host(
+            url.clone(),
+            &ipv6_addresses[0],
+            host,
+            ignore_tls_errors,
+            parsed_url.port(),
+        )
+        .await
+    } else {
+        HttpPingResult {
+            url: url.clone(),
+            ip_address: None,
+            status_code: None,
+            response_time_ms: None,
+            success: false,
+            error_message: Some("IPv6アドレスが見つかりません".to_string()),
+        }
+    };
 
     Ok(HttpPingDualResult {
         url,
+        dns_resolution: dns_result,
         ipv4: ipv4_result,
         ipv6: ipv6_result,
     })
 }
 
-async fn ping_http_with_ip_version(
-    url: String,
+// DNS名前解決を実行
+async fn resolve_dns(host: &str) -> DnsResolution {
+    use trust_dns_resolver::TokioAsyncResolver;
+
+    let mut ipv4_addresses = Vec::new();
+    let mut ipv6_addresses = Vec::new();
+
+    // TokioAsyncResolverを作成（システム設定から）
+    match TokioAsyncResolver::tokio_from_system_conf() {
+        Ok(resolver) => {
+            // IP解決を実行
+            if let Ok(lookup) = resolver.lookup_ip(host).await {
+                for ip_addr in lookup.iter() {
+                    match ip_addr {
+                        std::net::IpAddr::V4(v4) => {
+                            ipv4_addresses.push(v4.to_string());
+                        }
+                        std::net::IpAddr::V6(v6) => {
+                            ipv6_addresses.push(v6.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            // システム設定から作成できない場合は DefaultResolverConfig を使用
+            use trust_dns_resolver::config::*;
+
+            let resolver = TokioAsyncResolver::tokio(
+                ResolverConfig::new(),
+                ResolverOpts::default(),
+            );
+
+            if let Ok(lookup) = resolver.lookup_ip(host).await {
+                for ip_addr in lookup.iter() {
+                    match ip_addr {
+                        std::net::IpAddr::V4(v4) => {
+                            ipv4_addresses.push(v4.to_string());
+                        }
+                        std::net::IpAddr::V6(v6) => {
+                            ipv6_addresses.push(v6.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    DnsResolution {
+        ipv4_addresses,
+        ipv6_addresses,
+    }
+}
+
+// 指定されたIPアドレスにHTTP接続（Hostsヘッダー付き）
+async fn connect_to_ip_with_host(
+    original_url: String,
+    ip_address: &str,
+    host: &str,
     ignore_tls_errors: bool,
-    ip_version: u32,
+    _port: Option<u16>,
 ) -> HttpPingResult {
     let start = Instant::now();
 
-    // URLの検証
-    let parsed_url = match reqwest::Url::parse(&url) {
-        Ok(u) => u,
+    // URLをIPアドレスで置き換え（IPv6の場合は[]で囲む）
+    let ip_for_url = if ip_address.contains(':') {
+        format!("[{}]", ip_address)
+    } else {
+        ip_address.to_string()
+    };
+
+    let request_url = format!("{}://{}",
+        if original_url.starts_with("https") { "https" } else { "http" },
+        ip_for_url
+    );
+
+    // HTTPクライアントの構築
+    let client_result = if ignore_tls_errors {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_secs(30))
+            .build()
+    } else {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+    };
+
+    let client = match client_result {
+        Ok(c) => c,
         Err(e) => {
             return HttpPingResult {
-                url: url.clone(),
+                url: original_url,
+                ip_address: Some(ip_address.to_string()),
                 status_code: None,
                 response_time_ms: None,
                 success: false,
-                error_message: Some(format!("無効なURL: {}", e)),
+                error_message: Some(format!("HTTPクライアント作成失敗: {}", e)),
             };
         }
     };
 
-    // HTTPクライアントの構築（IP バージョン指定）
-    let client = if ignore_tls_errors {
-        match reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .timeout(Duration::from_secs(30))
-            .local_address(if ip_version == 4 {
-                Some("0.0.0.0".parse().unwrap())
-            } else {
-                Some("::".parse().unwrap())
-            })
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                return HttpPingResult {
-                    url: url.clone(),
-                    status_code: None,
-                    response_time_ms: None,
-                    success: false,
-                    error_message: Some(format!("HTTPクライアント作成失敗: {}", e)),
-                };
-            }
-        }
-    } else {
-        match reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .local_address(if ip_version == 4 {
-                Some("0.0.0.0".parse().unwrap())
-            } else {
-                Some("::".parse().unwrap())
-            })
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                return HttpPingResult {
-                    url: url.clone(),
-                    status_code: None,
-                    response_time_ms: None,
-                    success: false,
-                    error_message: Some(format!("HTTPクライアント作成失敗: {}", e)),
-                };
-            }
-        }
-    };
-
-    // HTTPリクエスト
-    let response = match client.get(parsed_url.as_str()).send().await {
+    // HTTPリクエスト（Hostヘッダー付き）
+    let response = match client
+        .get(&request_url)
+        .header("Host", host)
+        .send()
+        .await
+    {
         Ok(resp) => resp,
         Err(e) => {
             let elapsed = start.elapsed().as_millis() as u64;
             return HttpPingResult {
-                url: url.clone(),
+                url: original_url,
+                ip_address: Some(ip_address.to_string()),
                 status_code: None,
                 response_time_ms: Some(elapsed),
                 success: false,
@@ -287,7 +395,8 @@ async fn ping_http_with_ip_version(
     let success = response.status().is_success();
 
     HttpPingResult {
-        url: url.clone(),
+        url: original_url,
+        ip_address: Some(ip_address.to_string()),
         status_code: Some(status_code),
         response_time_ms: Some(elapsed),
         success,

@@ -20,14 +20,21 @@ interface EnvironmentCheckResult {
 
 interface HttpPingResult {
     url: string;
+    ip_address?: string;
     status_code?: number;
     response_time_ms?: number;
     success: boolean;
     error_message?: string;
 }
 
+interface DnsResolution {
+    ipv4_addresses: string[];
+    ipv6_addresses: string[];
+}
+
 interface HttpPingDualResult {
     url: string;
+    dns_resolution: DnsResolution;
     ipv4: HttpPingResult;
     ipv6: HttpPingResult;
 }
@@ -196,6 +203,34 @@ async function performHttpPing() {
             html += '<div class="error">❌ 疎通確認失敗</div>';
         }
 
+        // DNS解決結果
+        html += "<h3>📍 DNS名前解決結果</h3>";
+        html += "<div style='background: #f9f9f9; padding: 10px; border-radius: 4px; margin-bottom: 15px;'>";
+        html += "<div style='display: grid; grid-template-columns: 1fr 1fr; gap: 15px;'>";
+
+        // IPv4解決結果
+        html += "<div>";
+        html += "<strong>IPv4 (A record):</strong><br>";
+        if (result.dns_resolution.ipv4_addresses.length > 0) {
+            html += result.dns_resolution.ipv4_addresses.map(ip => `<code>${ip}</code>`).join(", ");
+        } else {
+            html += '<span style="color: #ff9800;">見つかりません</span>';
+        }
+        html += "</div>";
+
+        // IPv6解決結果
+        html += "<div>";
+        html += "<strong>IPv6 (AAAA record):</strong><br>";
+        if (result.dns_resolution.ipv6_addresses.length > 0) {
+            html += result.dns_resolution.ipv6_addresses.map(ip => `<code>${ip}</code>`).join(", ");
+        } else {
+            html += '<span style="color: #ff9800;">見つかりません</span>';
+        }
+        html += "</div>";
+
+        html += "</div>";
+        html += "</div>";
+
         html += "<h3>結果詳細</h3>";
         html += "<div style='display: grid; grid-template-columns: 1fr 1fr; gap: 15px;'>";
 
@@ -209,6 +244,9 @@ async function performHttpPing() {
         }
         html += "<ul style='margin: 0; padding: 0 0 0 20px;'>";
         html += `<li><strong>URL:</strong> ${result.ipv4.url}</li>`;
+        if (result.ipv4.ip_address) {
+            html += `<li><strong>接続試行IPアドレス:</strong> <code>${result.ipv4.ip_address}</code></li>`;
+        }
         if (result.ipv4.status_code !== undefined) {
             html += `<li><strong>ステータスコード:</strong> ${result.ipv4.status_code}</li>`;
         }
@@ -231,6 +269,9 @@ async function performHttpPing() {
         }
         html += "<ul style='margin: 0; padding: 0 0 0 20px;'>";
         html += `<li><strong>URL:</strong> ${result.ipv6.url}</li>`;
+        if (result.ipv6.ip_address) {
+            html += `<li><strong>接続試行IPアドレス:</strong> <code>${result.ipv6.ip_address}</code></li>`;
+        }
         if (result.ipv6.status_code !== undefined) {
             html += `<li><strong>ステータスコード:</strong> ${result.ipv6.status_code}</li>`;
         }
@@ -285,7 +326,24 @@ function sendMailto() {
         body += "■ 疎通確認結果\n";
         body += `URL: ${lastPingDualResult.url}\n\n`;
 
+        // DNS解決結果
+        body += "【DNS名前解決結果】\n";
+        if (lastPingDualResult.dns_resolution.ipv4_addresses.length > 0) {
+            body += `IPv4 (A record): ${lastPingDualResult.dns_resolution.ipv4_addresses.join(", ")}\n`;
+        } else {
+            body += "IPv4 (A record): 見つかりません\n";
+        }
+        if (lastPingDualResult.dns_resolution.ipv6_addresses.length > 0) {
+            body += `IPv6 (AAAA record): ${lastPingDualResult.dns_resolution.ipv6_addresses.join(", ")}\n`;
+        } else {
+            body += "IPv6 (AAAA record): 見つかりません\n";
+        }
+        body += "\n";
+
         body += "【IPv4限定テスト】\n";
+        if (lastPingDualResult.ipv4.ip_address) {
+            body += `接続試行IPアドレス: ${lastPingDualResult.ipv4.ip_address}\n`;
+        }
         body += `結果: ${lastPingDualResult.ipv4.success ? "成功" : "失敗"}\n`;
         if (lastPingDualResult.ipv4.status_code !== undefined) {
             body += `ステータスコード: ${lastPingDualResult.ipv4.status_code}\n`;
@@ -298,6 +356,9 @@ function sendMailto() {
         }
 
         body += "\n【IPv6限定テスト】\n";
+        if (lastPingDualResult.ipv6.ip_address) {
+            body += `接続試行IPアドレス: ${lastPingDualResult.ipv6.ip_address}\n`;
+        }
         body += `結果: ${lastPingDualResult.ipv6.success ? "成功" : "失敗"}\n`;
         if (lastPingDualResult.ipv6.status_code !== undefined) {
             body += `ステータスコード: ${lastPingDualResult.ipv6.status_code}\n`;
