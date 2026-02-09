@@ -374,7 +374,7 @@ async function performHttpPing() {
 
 // 結果をテキストファイルに保存
 async function saveResultAsTextFile() {
-    let body = "=== ghttpping 疎通確認結果 ===\n\n";
+    let body = "=== ghttpping-tauri 疎通確認結果 ===\n\n";
 
     if (lastEnvResult) {
         body += "■ 環境チェック結果\n";
@@ -507,7 +507,7 @@ async function saveResultAsTextFile() {
                     extensions: ["txt"],
                 },
             ],
-            defaultPath: `ghttpping_result_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5)}.txt`,
+            defaultPath: `ghttpping_tauri_result_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5)}.txt`,
         });
 
         console.log("Dialog result:", filePath);

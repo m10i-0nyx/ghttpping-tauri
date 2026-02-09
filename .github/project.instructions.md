@@ -1,7 +1,7 @@
 ---
 applyTo: "**"
 ---
-# ghttpping - プロジェクト指針
+# ghttpping-tauri - プロジェクト指針
 ## 目的（Goal）
 
 本リポジトリは、**Windows上 で HTTP/HTTPS の 疎通確認および遅延測定 GUI アプリ**を構築することを目的とする。
