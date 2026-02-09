@@ -33,7 +33,7 @@ pub struct HttpPingResult {
 }
 
 #[tauri::command]
-pub async fn check_environment() -> Result<EnvironmentCheckResult, String> {
+async fn environment_check() -> Result<EnvironmentCheckResult, String> {
     let mut result = EnvironmentCheckResult {
         adapters: vec![],
         ipv4_connectivity: false,
@@ -99,7 +99,7 @@ pub async fn check_environment() -> Result<EnvironmentCheckResult, String> {
 }
 
 #[tauri::command]
-pub async fn http_ping(
+async fn ping_http(
     url: String,
     ignore_tls_errors: bool,
 ) -> Result<HttpPingResult, String> {
@@ -331,7 +331,7 @@ async fn get_tls_certificate_expiry(url: &str, ignore_errors: bool) -> Option<St
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![check_environment, http_ping])
+        .invoke_handler(tauri::generate_handler![environment_check, ping_http])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

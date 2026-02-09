@@ -36,9 +36,6 @@ window.addEventListener("DOMContentLoaded", () => {
     const pingBtn = document.getElementById("ping-btn");
     const mailtoBtn = document.getElementById("mailto-btn");
     const urlInput = document.getElementById("url-input") as HTMLInputElement;
-    const ignoreTlsCheckbox = document.getElementById(
-        "ignore-tls-checkbox"
-    ) as HTMLInputElement;
 
     if (checkEnvBtn) {
         checkEnvBtn.addEventListener("click", checkEnvironment);
@@ -70,7 +67,7 @@ async function checkEnvironment() {
     resultDiv.innerHTML = '<div class="loading">環境をチェック中...</div>';
 
     try {
-        const result = (await invoke("check_environment")) as EnvironmentCheckResult;
+        const result = (await invoke("environment_check")) as EnvironmentCheckResult;
         lastEnvResult = result;
 
         let html = "";
@@ -150,7 +147,7 @@ async function performHttpPing() {
 
     try {
         const ignoreTls = ignoreTlsCheckbox?.checked || false;
-        const result = (await invoke("http_ping", {
+        const result = (await invoke("ping_http", {
             url,
             ignoreTlsErrors: ignoreTls,
         })) as HttpPingResult;
