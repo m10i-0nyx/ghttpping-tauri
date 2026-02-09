@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct NetworkAdapter {jsonjson
+pub struct NetworkAdapter {
     pub name: String,
     pub ip_addresses: Vec<String>,
     pub has_ipv4: bool,
@@ -88,27 +88,27 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
         }
     }
 
-    // IPv4接続確認
-    match check_ipv4_connectivity().await {
-        Ok(connected) => {
-            result.ipv4_connectivity = connected;
+    // IPv4接続確認（グローバルIP取得で兼ねる）
+    match fetch_global_ipv4_info().await {
+        Ok(info) => {
+            result.ipv4_connectivity = true;
+            result.ipv4_global_ip = Some(info);
         }
         Err(e) => {
-            result
-                .error_messages
-                .push(format!("IPv4接続確認に失敗: {}", e));
+            result.ipv4_connectivity = false;
+            result.error_messages.push(format!("IPv4グローバルIP取得に失敗: {}", e));
         }
     }
 
-    // IPv6接続確認
-    match check_ipv6_connectivity().await {
-        Ok(connected) => {
-            result.ipv6_connectivity = connected;
+    // IPv6接続確認（グローバルIP取得で兼ねる）
+    match fetch_global_ipv6_info().await {
+        Ok(info) => {
+            result.ipv6_connectivity = true;
+            result.ipv6_global_ip = Some(info);
         }
         Err(e) => {
-            result
-                .error_messages
-                .push(format!("IPv6接続確認に失敗: {}", e));
+            result.ipv6_connectivity = false;
+            result.error_messages.push(format!("IPv6グローバルIP取得に失敗: {}", e));
         }
     }
 
@@ -137,29 +137,8 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
     }
 
     // インターネット接続判定
-    result.internet_available = (result.ipv4_connectivity || result.ipv6_connectivity)
+    result.internet_available = result.ipv4_connectivity || result.ipv6_connectivity
         && result.dns_resolution;
-
-    // グローバルIPアドレス取得
-    if result.internet_available {
-        match fetch_global_ipv4_info().await {
-            Ok(info) => {
-                result.ipv4_global_ip = Some(info);
-            }
-            Err(e) => {
-                result.error_messages.push(format!("IPv4グローバルIP取得に失敗: {}", e));
-            }
-        }
-
-        match fetch_global_ipv6_info().await {
-            Ok(info) => {
-                result.ipv6_global_ip = Some(info);
-            }
-            Err(e) => {
-                result.error_messages.push(format!("IPv6グローバルIP取得に失敗: {}", e));
-            }
-        }
-    }
 
     Ok(result)
 }
@@ -605,7 +584,7 @@ async fn check_ipv6_connectivity() -> Result<bool, String> {
             "%{http_code}",
             "-m",
             "10",
-            "https://getipv6.0nyx.net/json",
+            "https://getipv6.0nyx.net/",
         ])
         .output()
         .map_err(|e| format!("curl 実行失敗: {}", e))?;
