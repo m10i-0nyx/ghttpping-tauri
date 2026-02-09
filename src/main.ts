@@ -22,7 +22,6 @@ interface HttpPingResult {
     url: string;
     status_code?: number;
     response_time_ms?: number;
-    tls_certificate_expiry?: string;
     success: boolean;
     error_message?: string;
 }
@@ -129,9 +128,6 @@ async function checkEnvironment() {
 // HTTP/HTTPS疎通確認を実行
 async function performHttpPing() {
     const urlInput = document.getElementById("url-input") as HTMLInputElement;
-    const ignoreTlsCheckbox = document.getElementById(
-        "ignore-tls-checkbox"
-    ) as HTMLInputElement;
     const resultDiv = document.getElementById("ping-result");
     const mailtoBtn = document.getElementById("mailto-btn");
 
@@ -146,10 +142,9 @@ async function performHttpPing() {
     resultDiv.innerHTML = '<div class="loading">疎通確認中...</div>';
 
     try {
-        const ignoreTls = ignoreTlsCheckbox?.checked || false;
         const result = (await invoke("ping_http", {
             url,
-            ignoreTlsErrors: ignoreTls,
+            ignoreTlsErrors: false,
         })) as HttpPingResult;
 
         lastPingResult = result;
@@ -172,10 +167,6 @@ async function performHttpPing() {
 
         if (result.response_time_ms !== undefined) {
             html += `<li><strong>レスポンス時間:</strong> ${result.response_time_ms} ms</li>`;
-        }
-
-        if (result.tls_certificate_expiry) {
-            html += `<li><strong>TLS証明書:</strong> ${result.tls_certificate_expiry}</li>`;
         }
 
         if (result.error_message) {
@@ -229,9 +220,6 @@ function sendMailto() {
         }
         if (lastPingResult.response_time_ms !== undefined) {
             body += `レスポンス時間: ${lastPingResult.response_time_ms} ms\n`;
-        }
-        if (lastPingResult.tls_certificate_expiry) {
-            body += `TLS証明書: ${lastPingResult.tls_certificate_expiry}\n`;
         }
         if (lastPingResult.error_message) {
             body += `エラー: ${lastPingResult.error_message}\n`;

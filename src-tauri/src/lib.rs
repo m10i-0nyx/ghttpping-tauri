@@ -27,7 +27,6 @@ pub struct HttpPingResult {
     pub url: String,
     pub status_code: Option<u16>,
     pub response_time_ms: Option<u64>,
-    pub tls_certificate_expiry: Option<String>,
     pub success: bool,
     pub error_message: Option<String>,
 }
@@ -113,7 +112,6 @@ async fn ping_http(
                 url: url.clone(),
                 status_code: None,
                 response_time_ms: None,
-                tls_certificate_expiry: None,
                 success: false,
                 error_message: Some(format!("無効なURL: {}", e)),
             });
@@ -139,7 +137,6 @@ async fn ping_http(
                 url: url.clone(),
                 status_code: None,
                 response_time_ms: None,
-                tls_certificate_expiry: None,
                 success: false,
                 error_message: Some(format!("HTTPクライアント作成失敗: {}", e)),
             });
@@ -155,7 +152,6 @@ async fn ping_http(
                 url: url.clone(),
                 status_code: None,
                 response_time_ms: Some(elapsed),
-                tls_certificate_expiry: None,
                 success: false,
                 error_message: Some(format!("接続エラー: {}", e)),
             });
@@ -166,18 +162,10 @@ async fn ping_http(
     let status_code = response.status().as_u16();
     let success = response.status().is_success();
 
-    // TLS証明書の有効期限取得（HTTPSの場合）
-    let tls_expiry = if parsed_url.scheme() == "https" {
-        get_tls_certificate_expiry(&url, ignore_tls_errors).await
-    } else {
-        None
-    };
-
     Ok(HttpPingResult {
         url: url.clone(),
         status_code: Some(status_code),
         response_time_ms: Some(elapsed),
-        tls_certificate_expiry: tls_expiry,
         success,
         error_message: if success {
             None
@@ -317,14 +305,6 @@ async fn check_dns_resolution() -> Result<bool, String> {
         Ok(mut addrs) => Ok(addrs.next().is_some()),
         Err(_) => Ok(false),
     }
-}
-
-// TLS証明書の有効期限を取得
-async fn get_tls_certificate_expiry(url: &str, ignore_errors: bool) -> Option<String> {
-    // 簡易実装: 実際の証明書取得は複雑なため、接続確認のみ
-    // 実用的には native-tls や rustls の証明書情報取得機能を使用
-    let _ = (url, ignore_errors);
-    Some("証明書情報取得は未実装".to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
