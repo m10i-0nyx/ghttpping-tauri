@@ -5,6 +5,9 @@ use std::process::{Command, Stdio};
 use std::collections::HashMap;
 use url::Url;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkAdapter {
     pub name: String,
@@ -483,6 +486,20 @@ async fn perform_curl_request(
 
 // ネットワークインターフェース情報を取得（セキュリティ強化版）
 fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
+    #[cfg(target_os = "windows")]
+    let output = Command::new("powershell")
+        .args(&[
+            "-NoProfile",
+            "-Command",
+            "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object -ExpandProperty Name",
+        ])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .output()
+        .map_err(|e| format!("PowerShellコマンド実行失敗: {}", e))?;
+
+    #[cfg(not(target_os = "windows"))]
     let output = Command::new("powershell")
         .args(&[
             "-NoProfile",
@@ -519,6 +536,15 @@ fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
             name
         );
 
+        #[cfg(target_os = "windows")]
+        let ip_output = Command::new("powershell")
+            .args(&["-NoProfile", "-Command", &get_ip_cmd])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .output();
+
+        #[cfg(not(target_os = "windows"))]
         let ip_output = Command::new("powershell")
             .args(&["-NoProfile", "-Command", &get_ip_cmd])
             .stderr(Stdio::piped())
