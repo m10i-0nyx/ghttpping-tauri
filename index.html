@@ -33,6 +33,10 @@
               value="https://example.com"
             />
           </div>
+          <div class="input-group">
+            <input type="checkbox" id="ignore-tls-errors" />
+            <label for="ignore-tls-errors">TLS証明書の検証を無効化（自己署証明書対応）</label>
+          </div>
           <button id="ping-btn" class="btn-primary" disabled>疎通確認を実行</button>
           <p class="help-text">※環境チェック完了後に有効になります</p>
           <div id="ping-result" class="result-area"></div>

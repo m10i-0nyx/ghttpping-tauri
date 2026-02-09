@@ -259,9 +259,12 @@ async function performHttpPing() {
     resultDiv.innerHTML = '<div class="loading">疎通確認中...</div>';
 
     try {
+        const ignoreTlsCheckbox = document.getElementById("ignore-tls-errors") as HTMLInputElement;
+        const ignoreTlsErrors = ignoreTlsCheckbox?.checked ?? false;
+
         const result = (await invoke("ping_http_dual", {
             url,
-            ignoreTlsErrors: false,
+            ignoreTlsErrors,
         })) as HttpPingDualResult;
 
         lastPingDualResult = result;
