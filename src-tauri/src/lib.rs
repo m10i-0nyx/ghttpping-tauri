@@ -564,27 +564,61 @@ fn is_global_ipv6(ip: &Ipv6Addr) -> bool {
 
 // IPv4接続確認
 async fn check_ipv4_connectivity() -> Result<bool, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("クライアント作成失敗: {}", e))?;
+    use std::process::Command;
 
-    match client.get("https://getipv4.0nyx.net/").send().await {
-        Ok(response) => Ok(response.status().is_success()),
-        Err(_) => Ok(false),
+    let output = Command::new("curl.exe")
+        .args(&[
+            "-s",
+            "-o",
+            "nul",
+            "-w",
+            "%{http_code}",
+            "-m",
+            "10",
+            "https://getipv4.0nyx.net/json",
+        ])
+        .output()
+        .map_err(|e| format!("curl 実行失敗: {}", e))?;
+
+    if !output.status.success() {
+        return Ok(false);
+    }
+
+    let status_code_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if let Ok(status_code) = status_code_str.parse::<u16>() {
+        Ok(status_code >= 200 && status_code < 300)
+    } else {
+        Ok(false)
     }
 }
 
 // IPv6接続確認
 async fn check_ipv6_connectivity() -> Result<bool, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("クライアント作成失敗: {}", e))?;
+    use std::process::Command;
 
-    match client.get("https://getipv6.0nyx.net/").send().await {
-        Ok(response) => Ok(response.status().is_success()),
-        Err(_) => Ok(false),
+    let output = Command::new("curl.exe")
+        .args(&[
+            "-s",
+            "-o",
+            "nul",
+            "-w",
+            "%{http_code}",
+            "-m",
+            "10",
+            "https://getipv6.0nyx.net/json",
+        ])
+        .output()
+        .map_err(|e| format!("curl 実行失敗: {}", e))?;
+
+    if !output.status.success() {
+        return Ok(false);
+    }
+
+    let status_code_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if let Ok(status_code) = status_code_str.parse::<u16>() {
+        Ok(status_code >= 200 && status_code < 300)
+    } else {
+        Ok(false)
     }
 }
 
