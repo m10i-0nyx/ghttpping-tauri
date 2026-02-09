@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ghttpping - HTTP/HTTPS疎通確認ツール</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>🌐 ghttpping</h1>
+        <p>HTTP/HTTPS疎通確認および遅延測定ツール</p>
+      </header>
+
+      <main>
+        <!-- 環境チェックセクション -->
+        <section class="card">
+          <h2>環境チェック</h2>
+          <button id="check-env-btn" class="btn-primary">環境を確認</button>
+          <div id="env-result" class="result-area"></div>
+        </section>
+
+        <!-- HTTP/HTTPS疎通確認セクション -->
+        <section class="card">
+          <h2>Webサイト疎通確認</h2>
+          <div class="input-group">
+            <label for="url-input">URL:</label>
+            <input
+              type="text"
+              id="url-input"
+              placeholder="https://example.com"
+              value="https://example.com"
+            />
+          </div>
+          <div class="checkbox-group">
+            <label>
+              <input type="checkbox" id="ignore-tls-checkbox" />
+              TLS証明書の検証を無効化
+            </label>
+          </div>
+          <button id="ping-btn" class="btn-primary">疎通確認を実行</button>
+          <div id="ping-result" class="result-area"></div>
+        </section>
+
+        <!-- 結果出力セクション -->
+        <section class="card">
+          <h2>結果をメール送信</h2>
+          <button id="mailto-btn" class="btn-secondary" disabled>
+            結果をメールで送信
+          </button>
+          <p class="help-text">※疎通確認を実行すると有効になります</p>
+        </section>
+      </main>
+
+      <footer>
+        <p>© 2026 ghttpping-windows | Windows 11専用アプリ</p>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
