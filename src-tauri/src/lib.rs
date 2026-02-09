@@ -208,13 +208,6 @@ async fn ping_http(
         .stdout(Stdio::piped())
         .output();
 
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("curl.exe")
-        .args(&cmd_args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output();
-
     let elapsed = start.elapsed().as_millis() as u64;
 
     match output {
@@ -441,17 +434,9 @@ async fn perform_curl_request(
 
     cmd_args.push(original_url.to_string());
 
-    #[cfg(target_os = "windows")]
     let output = Command::new("curl.exe")
         .args(&cmd_args)
         .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output();
-
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("curl.exe")
-        .args(&cmd_args)
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .output();
@@ -518,7 +503,6 @@ async fn perform_curl_request(
 
 // ネットワークインターフェース情報を取得（セキュリティ強化版）
 fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
-    #[cfg(target_os = "windows")]
     let output = Command::new("powershell")
         .args(&[
             "-NoProfile",
@@ -528,20 +512,6 @@ fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
             "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object -ExpandProperty Name",
         ])
         .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| format!("PowerShellコマンド実行失敗: {}", e))?;
-
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("powershell")
-        .args(&[
-            "-NoProfile",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object -ExpandProperty Name",
-        ])
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .output()
@@ -572,17 +542,9 @@ fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
             name
         );
 
-        #[cfg(target_os = "windows")]
         let ip_output = Command::new("powershell")
             .args(&["-NoProfile", "-WindowStyle", "Hidden", "-Command", &get_ip_cmd])
             .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-            .stderr(Stdio::piped())
-            .stdout(Stdio::piped())
-            .output();
-
-        #[cfg(not(target_os = "windows"))]
-        let ip_output = Command::new("powershell")
-            .args(&["-NoProfile", "-WindowStyle", "Hidden", "-Command", &get_ip_cmd])
             .stderr(Stdio::piped())
             .stdout(Stdio::piped())
             .output();
@@ -629,7 +591,6 @@ fn is_global_ipv6(ip: &Ipv6Addr) -> bool {
 // IPv4/IPv6接続確認（汎用関数）
 #[allow(dead_code)]
 async fn check_connectivity(url: &str, timeout_secs: u64) -> Result<bool, String> {
-    #[cfg(target_os = "windows")]
     let output = Command::new("curl.exe")
         .args(&[
             "-s",
@@ -642,23 +603,6 @@ async fn check_connectivity(url: &str, timeout_secs: u64) -> Result<bool, String
             url,
         ])
         .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| format!("curl実行失敗: {}", e))?;
-
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("curl.exe")
-        .args(&[
-            "-s",
-            "-o",
-            "nul",
-            "-w",
-            "%{http_code}",
-            "-m",
-            &timeout_secs.to_string(),
-            url,
-        ])
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .output()
@@ -677,18 +621,9 @@ async fn check_connectivity(url: &str, timeout_secs: u64) -> Result<bool, String
 
 // グローバルIP情報取得（汎用関数）
 async fn fetch_global_ip_info(url: &str, timeout_secs: u64) -> Result<GlobalIPInfo, String> {
-    #[cfg(target_os = "windows")]
     let output = Command::new("curl.exe")
         .args(&["-s", "-m", &timeout_secs.to_string(), url])
         .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| format!("curl実行失敗: {}", e))?;
-
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("curl.exe")
-        .args(&["-s", "-m", &timeout_secs.to_string(), url])
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .output()
@@ -768,18 +703,9 @@ fn get_dns_servers_from_powershell() -> Result<Vec<DnsServerInfo>, String> {
         ForEach-Object { "$iface : $_" }
     }"#;
 
-    #[cfg(target_os = "windows")]
     let output = Command::new("powershell")
         .args(&["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_command])
         .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| format!("PowerShellコマンド実行失敗: {}", e))?;
-
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("powershell")
-        .args(&["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_command])
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .output()
@@ -837,18 +763,9 @@ fn get_dns_servers_from_powershell() -> Result<Vec<DnsServerInfo>, String> {
 
 // ipconfig /all から DNS サーバ情報を取得
 fn parse_dns_from_ipconfig() -> Result<Vec<DnsServerInfo>, String> {
-    #[cfg(target_os = "windows")]
     let output = Command::new("ipconfig")
         .args(&["/all"])
         .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| format!("ipconfig コマンド実行失敗: {}", e))?;
-
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("ipconfig")
-        .args(&["/all"])
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .output()
