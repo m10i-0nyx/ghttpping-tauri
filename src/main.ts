@@ -454,7 +454,12 @@ async function saveResultAsTextFile() {
 
     if (lastPingDualResult) {
         body += "■ 疎通確認結果\n";
-        body += `URL: ${lastPingDualResult.url}\n\n`;
+        body += `URL: ${lastPingDualResult.url}\n`;
+
+        // TLS証明書検証の状態
+        const ignoreTlsCheckbox = document.getElementById("ignore-tls-errors") as HTMLInputElement;
+        const ignoreTlsErrors = ignoreTlsCheckbox?.checked ?? false;
+        body += `TLS証明書検証: ${ignoreTlsErrors ? "無効化" : "有効"}\n\n`;
 
         // DNS解決結果
         body += "【DNS名前解決結果】\n";
