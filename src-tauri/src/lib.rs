@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct NetworkAdapter {
+pub struct NetworkAdapter {jsonjson
     pub name: String,
     pub ip_addresses: Vec<String>,
     pub has_ipv4: bool,
@@ -837,10 +837,7 @@ fn is_ip_address_like(s: &str) -> bool {
 
 // グローバルIPv4情報の取得
 async fn fetch_global_ipv4_info() -> Result<GlobalIPInfo, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("クライアント作成失敗: {}", e))?;
+    use std::process::Command;
 
     #[derive(Deserialize)]
     struct IpResponse {
@@ -848,15 +845,22 @@ async fn fetch_global_ipv4_info() -> Result<GlobalIPInfo, String> {
         datetime_jst: String,
     }
 
-    let response = client
-        .get("https://getipv4.0nyx.net/json")
-        .send()
-        .await
-        .map_err(|e| format!("IPv4リクエスト失敗: {}", e))?;
+    let output = Command::new("curl.exe")
+        .args(&[
+            "-s",
+            "-m",
+            "10",
+            "https://getipv4.0nyx.net/json",
+        ])
+        .output()
+        .map_err(|e| format!("curl 実行失敗: {}", e))?;
 
-    let body: IpResponse = response
-        .json()
-        .await
+    if !output.status.success() {
+        return Err("IPv4グローバルIP取得失敗".to_string());
+    }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let body: IpResponse = serde_json::from_str(&json_str)
         .map_err(|e| format!("JSON解析失敗: {}", e))?;
 
     Ok(GlobalIPInfo {
@@ -867,10 +871,7 @@ async fn fetch_global_ipv4_info() -> Result<GlobalIPInfo, String> {
 
 // グローバルIPv6情報の取得
 async fn fetch_global_ipv6_info() -> Result<GlobalIPInfo, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("クライアント作成失敗: {}", e))?;
+    use std::process::Command;
 
     #[derive(Deserialize)]
     struct IpResponse {
@@ -878,15 +879,22 @@ async fn fetch_global_ipv6_info() -> Result<GlobalIPInfo, String> {
         datetime_jst: String,
     }
 
-    let response = client
-        .get("https://getipv6.0nyx.net/json")
-        .send()
-        .await
-        .map_err(|e| format!("IPv6リクエスト失敗: {}", e))?;
+    let output = Command::new("curl.exe")
+        .args(&[
+            "-s",
+            "-m",
+            "10",
+            "https://getipv6.0nyx.net/json",
+        ])
+        .output()
+        .map_err(|e| format!("curl 実行失敗: {}", e))?;
 
-    let body: IpResponse = response
-        .json()
-        .await
+    if !output.status.success() {
+        return Err("IPv6グローバルIP取得失敗".to_string());
+    }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let body: IpResponse = serde_json::from_str(&json_str)
         .map_err(|e| format!("JSON解析失敗: {}", e))?;
 
     Ok(GlobalIPInfo {
