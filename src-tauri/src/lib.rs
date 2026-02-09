@@ -267,144 +267,185 @@ async fn ping_http_dual(
     })
 }
 
-// DNS名前解決を実行
+// DNS名前解決を実行（PowerShell Resolve-DnsName を使用・非ブロッキング）
 async fn resolve_dns(host: &str) -> DnsResolution {
-    use trust_dns_resolver::TokioAsyncResolver;
+    use std::process::Command;
 
-    let mut ipv4_addresses = Vec::new();
-    let mut ipv6_addresses = Vec::new();
+    let host = host.to_string();
 
-    // TokioAsyncResolverを作成（システム設定から）
-    match TokioAsyncResolver::tokio_from_system_conf() {
-        Ok(resolver) => {
-            // IP解決を実行
-            if let Ok(lookup) = resolver.lookup_ip(host).await {
-                for ip_addr in lookup.iter() {
-                    match ip_addr {
-                        std::net::IpAddr::V4(v4) => {
-                            ipv4_addresses.push(v4.to_string());
-                        }
-                        std::net::IpAddr::V6(v6) => {
-                            ipv6_addresses.push(v6.to_string());
-                        }
+    // ブロッキング処理をスレッドプール上で実行
+    let result = tokio::task::spawn_blocking(move || {
+        let mut ipv4_addresses = Vec::new();
+        let mut ipv6_addresses = Vec::new();
+
+        // PowerShell コマンドで DNS解決（A レコード）
+        let ipv4_output = Command::new("powershell")
+            .args(&[
+                "-Command",
+                &format!(
+                    "Resolve-DnsName -Name '{}' -Type A -ErrorAction SilentlyContinue | Select-Object -ExpandProperty IPAddress",
+                    host
+                ),
+            ])
+            .output();
+
+        if let Ok(output) = ipv4_output {
+            if output.status.success() {
+                let result = String::from_utf8_lossy(&output.stdout);
+                for line in result.lines() {
+                    let ip = line.trim();
+                    if !ip.is_empty() {
+                        ipv4_addresses.push(ip.to_string());
                     }
                 }
             }
         }
-        Err(_) => {
-            // システム設定から作成できない場合は DefaultResolverConfig を使用
-            use trust_dns_resolver::config::*;
 
-            let resolver = TokioAsyncResolver::tokio(
-                ResolverConfig::new(),
-                ResolverOpts::default(),
-            );
+        // PowerShell コマンドで DNS解決（AAAA レコード）
+        let ipv6_output = Command::new("powershell")
+            .args(&[
+                "-Command",
+                &format!(
+                    "Resolve-DnsName -Name '{}' -Type AAAA -ErrorAction SilentlyContinue | Select-Object -ExpandProperty IPAddress",
+                    host
+                ),
+            ])
+            .output();
 
-            if let Ok(lookup) = resolver.lookup_ip(host).await {
-                for ip_addr in lookup.iter() {
-                    match ip_addr {
-                        std::net::IpAddr::V4(v4) => {
-                            ipv4_addresses.push(v4.to_string());
-                        }
-                        std::net::IpAddr::V6(v6) => {
-                            ipv6_addresses.push(v6.to_string());
-                        }
+        if let Ok(output) = ipv6_output {
+            if output.status.success() {
+                let result = String::from_utf8_lossy(&output.stdout);
+                for line in result.lines() {
+                    let ip = line.trim();
+                    if !ip.is_empty() {
+                        ipv6_addresses.push(ip.to_string());
                     }
                 }
             }
         }
-    }
 
-    DnsResolution {
-        ipv4_addresses,
-        ipv6_addresses,
-    }
+        DnsResolution {
+            ipv4_addresses,
+            ipv6_addresses,
+        }
+    })
+    .await;
+
+    result.unwrap_or(DnsResolution {
+        ipv4_addresses: Vec::new(),
+        ipv6_addresses: Vec::new(),
+    })
 }
 
-// 指定されたIPアドレスにHTTP接続（Hostsヘッダー付き）
+// 指定されたIPアドレスにHTTP接続（curl コマンドを使用・SNI対応）
 async fn connect_to_ip_with_host(
     original_url: String,
     ip_address: &str,
     host: &str,
     ignore_tls_errors: bool,
-    _port: Option<u16>,
+    port: Option<u16>,
 ) -> HttpPingResult {
+    use std::process::Command;
+
     let start = Instant::now();
 
-    // URLをIPアドレスで置き換え（IPv6の場合は[]で囲む）
-    let ip_for_url = if ip_address.contains(':') {
-        format!("[{}]", ip_address)
+    let is_https = original_url.starts_with("https");
+    let scheme = if is_https { "https" } else { "http" };
+    let default_port = if is_https { 443 } else { 80 };
+    let port_num = port.unwrap_or(default_port);
+
+    // --resolve オプションにはIPv6は角括弧で囲む
+    let resolve_arg = if ip_address.contains(':') {
+        format!("{}:{}:[{}]", host, port_num, ip_address)
     } else {
-        ip_address.to_string()
+        format!("{}:{}:{}", host, port_num, ip_address)
     };
 
-    let request_url = format!("{}://{}",
-        if original_url.starts_with("https") { "https" } else { "http" },
-        ip_for_url
-    );
+    // 元のURLでのリクエスト（SNI用）
+    let request_url = original_url.clone();
 
-    // HTTPクライアントの構築
-    let client_result = if ignore_tls_errors {
-        reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .timeout(Duration::from_secs(30))
-            .build()
-    } else {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-    };
+    let mut cmd_args = vec![
+        "--resolve".to_string(),
+        resolve_arg,
+        "-s".to_string(),
+        "-o".to_string(),
+        "nul".to_string(),
+        "-w".to_string(),
+        "%{http_code}".to_string(),
+        "-m".to_string(),
+        "30".to_string(),
+    ];
 
-    let client = match client_result {
-        Ok(c) => c,
-        Err(e) => {
-            return HttpPingResult {
-                url: original_url,
-                ip_address: Some(ip_address.to_string()),
-                status_code: None,
-                response_time_ms: None,
-                success: false,
-                error_message: Some(format!("HTTPクライアント作成失敗: {}", e)),
-            };
+    if ignore_tls_errors {
+        cmd_args.push("-k".to_string());
+    }
+
+    cmd_args.push(request_url.clone());
+
+    let output = Command::new("curl.exe")
+        .args(&cmd_args)
+        .output();
+
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    match output {
+        Ok(output) => {
+            let status_code_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+            if output.status.success() && !status_code_str.is_empty() {
+                if let Ok(status_code) = status_code_str.parse::<u16>() {
+                    let success = status_code >= 200 && status_code < 300;
+                    HttpPingResult {
+                        url: original_url,
+                        ip_address: Some(ip_address.to_string()),
+                        status_code: Some(status_code),
+                        response_time_ms: Some(elapsed),
+                        success,
+                        error_message: if success {
+                            None
+                        } else {
+                            Some(format!("HTTPステータス: {}", status_code))
+                        },
+                    }
+                } else {
+                    HttpPingResult {
+                        url: original_url,
+                        ip_address: Some(ip_address.to_string()),
+                        status_code: None,
+                        response_time_ms: Some(elapsed),
+                        success: false,
+                        error_message: Some(format!("ステータスコード解析失敗: {}", status_code_str)),
+                    }
+                }
+            } else {
+                // エラーメッセージをstderr と status から取得
+                let error_msg = if !stderr_str.is_empty() {
+                    stderr_str
+                } else {
+                    format!("curl 終了コード: {}", output.status.code().unwrap_or(-1))
+                };
+
+                HttpPingResult {
+                    url: original_url,
+                    ip_address: Some(ip_address.to_string()),
+                    status_code: None,
+                    response_time_ms: Some(elapsed),
+                    success: false,
+                    error_message: Some(format!("接続エラー: {}", error_msg)),
+                }
+            }
         }
-    };
-
-    // HTTPリクエスト（Hostヘッダー付き）
-    let response = match client
-        .get(&request_url)
-        .header("Host", host)
-        .send()
-        .await
-    {
-        Ok(resp) => resp,
         Err(e) => {
-            let elapsed = start.elapsed().as_millis() as u64;
-            return HttpPingResult {
+            HttpPingResult {
                 url: original_url,
                 ip_address: Some(ip_address.to_string()),
                 status_code: None,
                 response_time_ms: Some(elapsed),
                 success: false,
-                error_message: Some(format!("接続エラー: {}", e)),
-            };
+                error_message: Some(format!("curl 実行失敗: {}", e)),
+            }
         }
-    };
-
-    let elapsed = start.elapsed().as_millis() as u64;
-    let status_code = response.status().as_u16();
-    let success = response.status().is_success();
-
-    HttpPingResult {
-        url: original_url,
-        ip_address: Some(ip_address.to_string()),
-        status_code: Some(status_code),
-        response_time_ms: Some(elapsed),
-        success,
-        error_message: if success {
-            None
-        } else {
-            Some(format!("HTTPステータス: {}", status_code))
-        },
     }
 }
 
