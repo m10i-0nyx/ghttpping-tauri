@@ -13,12 +13,20 @@ pub struct NetworkAdapter {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct GlobalIPInfo {
+    pub client_host: String,
+    pub datetime_jst: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EnvironmentCheckResult {
     pub adapters: Vec<NetworkAdapter>,
     pub ipv4_connectivity: bool,
     pub ipv6_connectivity: bool,
     pub dns_resolution: bool,
     pub internet_available: bool,
+    pub ipv4_global_ip: Option<GlobalIPInfo>,
+    pub ipv6_global_ip: Option<GlobalIPInfo>,
     pub error_messages: Vec<String>,
 }
 
@@ -54,6 +62,8 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
         ipv6_connectivity: false,
         dns_resolution: false,
         internet_available: false,
+        ipv4_global_ip: None,
+        ipv6_global_ip: None,
         error_messages: vec![],
     };
 
@@ -108,6 +118,27 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
     // インターネット接続判定
     result.internet_available = (result.ipv4_connectivity || result.ipv6_connectivity)
         && result.dns_resolution;
+
+    // グローバルIPアドレス取得
+    if result.internet_available {
+        match fetch_global_ipv4_info().await {
+            Ok(info) => {
+                result.ipv4_global_ip = Some(info);
+            }
+            Err(e) => {
+                result.error_messages.push(format!("IPv4グローバルIP取得に失敗: {}", e));
+            }
+        }
+
+        match fetch_global_ipv6_info().await {
+            Ok(info) => {
+                result.ipv6_global_ip = Some(info);
+            }
+            Err(e) => {
+                result.error_messages.push(format!("IPv6グローバルIP取得に失敗: {}", e));
+            }
+        }
+    }
 
     Ok(result)
 }
@@ -544,6 +575,66 @@ async fn check_dns_resolution() -> Result<bool, String> {
         Ok(mut addrs) => Ok(addrs.next().is_some()),
         Err(_) => Ok(false),
     }
+}
+
+// グローバルIPv4情報の取得
+async fn fetch_global_ipv4_info() -> Result<GlobalIPInfo, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("クライアント作成失敗: {}", e))?;
+
+    #[derive(Deserialize)]
+    struct IpResponse {
+        client_host: String,
+        datetime_jst: String,
+    }
+
+    let response = client
+        .get("https://getipv4.0nyx.net/json")
+        .send()
+        .await
+        .map_err(|e| format!("IPv4リクエスト失敗: {}", e))?;
+
+    let body: IpResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("JSON解析失敗: {}", e))?;
+
+    Ok(GlobalIPInfo {
+        client_host: body.client_host,
+        datetime_jst: body.datetime_jst,
+    })
+}
+
+// グローバルIPv6情報の取得
+async fn fetch_global_ipv6_info() -> Result<GlobalIPInfo, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("クライアント作成失敗: {}", e))?;
+
+    #[derive(Deserialize)]
+    struct IpResponse {
+        client_host: String,
+        datetime_jst: String,
+    }
+
+    let response = client
+        .get("https://getipv6.0nyx.net/json")
+        .send()
+        .await
+        .map_err(|e| format!("IPv6リクエスト失敗: {}", e))?;
+
+    let body: IpResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("JSON解析失敗: {}", e))?;
+
+    Ok(GlobalIPInfo {
+        client_host: body.client_host,
+        datetime_jst: body.datetime_jst,
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

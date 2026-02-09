@@ -9,12 +9,19 @@ interface NetworkAdapter {
     has_ipv6_global: boolean;
 }
 
+interface GlobalIPInfo {
+    client_host: string;
+    datetime_jst: string;
+}
+
 interface EnvironmentCheckResult {
     adapters: NetworkAdapter[];
     ipv4_connectivity: boolean;
     ipv6_connectivity: boolean;
     dns_resolution: boolean;
     internet_available: boolean;
+    ipv4_global_ip?: GlobalIPInfo;
+    ipv6_global_ip?: GlobalIPInfo;
     error_messages: string[];
 }
 
@@ -117,6 +124,28 @@ async function checkEnvironment() {
         html += `<li>IPv6接続: ${result.ipv6_connectivity ? "✅" : "❌"}</li>`;
         html += `<li>DNS解決: ${result.dns_resolution ? "✅" : "❌"}</li>`;
         html += "</ul>";
+
+        // グローバルIPアドレス情報
+        if (result.ipv4_global_ip || result.ipv6_global_ip) {
+            html += "<h3>グローバルIPアドレス</h3>";
+            html += '<div class="global-ip-info">';
+
+            if (result.ipv4_global_ip) {
+                html += `<div class="ip-item">`;
+                html += `<strong>IPv4:</strong> ${result.ipv4_global_ip.client_host}<br>`;
+                html += `<small>${result.ipv4_global_ip.datetime_jst}</small>`;
+                html += `</div>`;
+            }
+
+            if (result.ipv6_global_ip) {
+                html += `<div class="ip-item">`;
+                html += `<strong>IPv6:</strong> ${result.ipv6_global_ip.client_host}<br>`;
+                html += `<small>${result.ipv6_global_ip.datetime_jst}</small>`;
+                html += `</div>`;
+            }
+
+            html += "</div>";
+        }
 
         // ネットワークアダプタ情報
         if (result.adapters.length > 0) {
