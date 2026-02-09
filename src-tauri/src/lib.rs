@@ -267,74 +267,39 @@ async fn ping_http_dual(
     })
 }
 
-// DNS名前解決を実行（PowerShell Resolve-DnsName を使用・非ブロッキング）
+// DNS名前解決を実行（tokio を使用・非ブロッキング）
 async fn resolve_dns(host: &str) -> DnsResolution {
-    use std::process::Command;
+    use tokio::net::lookup_host;
+    use std::net::IpAddr;
 
-    let host = host.to_string();
+    let mut ipv4_addresses = Vec::new();
+    let mut ipv6_addresses = Vec::new();
 
-    // ブロッキング処理をスレッドプール上で実行
-    let result = tokio::task::spawn_blocking(move || {
-        let mut ipv4_addresses = Vec::new();
-        let mut ipv6_addresses = Vec::new();
+    // ホスト名をIPアドレスに解決
+    let socket_addr = format!("{}:80", host);
 
-        // PowerShell コマンドで DNS解決（A レコード）
-        let ipv4_output = Command::new("powershell")
-            .args(&[
-                "-Command",
-                &format!(
-                    "Resolve-DnsName -Name '{}' -Type A -ErrorAction SilentlyContinue | Select-Object -ExpandProperty IPAddress",
-                    host
-                ),
-            ])
-            .output();
-
-        if let Ok(output) = ipv4_output {
-            if output.status.success() {
-                let result = String::from_utf8_lossy(&output.stdout);
-                for line in result.lines() {
-                    let ip = line.trim();
-                    if !ip.is_empty() {
-                        ipv4_addresses.push(ip.to_string());
+    match lookup_host(&socket_addr).await {
+        Ok(addrs) => {
+            for addr in addrs {
+                match addr.ip() {
+                    IpAddr::V4(ipv4) => {
+                        ipv4_addresses.push(ipv4.to_string());
+                    }
+                    IpAddr::V6(ipv6) => {
+                        ipv6_addresses.push(ipv6.to_string());
                     }
                 }
             }
         }
-
-        // PowerShell コマンドで DNS解決（AAAA レコード）
-        let ipv6_output = Command::new("powershell")
-            .args(&[
-                "-Command",
-                &format!(
-                    "Resolve-DnsName -Name '{}' -Type AAAA -ErrorAction SilentlyContinue | Select-Object -ExpandProperty IPAddress",
-                    host
-                ),
-            ])
-            .output();
-
-        if let Ok(output) = ipv6_output {
-            if output.status.success() {
-                let result = String::from_utf8_lossy(&output.stdout);
-                for line in result.lines() {
-                    let ip = line.trim();
-                    if !ip.is_empty() {
-                        ipv6_addresses.push(ip.to_string());
-                    }
-                }
-            }
+        Err(e) => {
+            eprintln!("DNS resolution failed for {}: {:?}", host, e);
         }
+    }
 
-        DnsResolution {
-            ipv4_addresses,
-            ipv6_addresses,
-        }
-    })
-    .await;
-
-    result.unwrap_or(DnsResolution {
-        ipv4_addresses: Vec::new(),
-        ipv6_addresses: Vec::new(),
-    })
+    DnsResolution {
+        ipv4_addresses,
+        ipv6_addresses,
+    }
 }
 
 // 指定されたIPアドレスにHTTP接続（curl コマンドを使用・SNI対応）
@@ -350,7 +315,7 @@ async fn connect_to_ip_with_host(
     let start = Instant::now();
 
     let is_https = original_url.starts_with("https");
-    let scheme = if is_https { "https" } else { "http" };
+    let _scheme = if is_https { "https" } else { "http" };
     let default_port = if is_https { 443 } else { 80 };
     let port_num = port.unwrap_or(default_port);
 
