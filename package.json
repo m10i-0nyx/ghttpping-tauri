@@ -6,7 +6,7 @@
     "scripts": {
         "dev": "tauri dev",
         "build": "tsc && vite build",
-        "tauri-build": "cross-env TAURI_WINDOWS_MSI_LANGUAGES=ja-JP tauri build",
+        "tauri-build": "tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc",
         "preview": "vite preview",
         "tauri": "tauri"
     },
