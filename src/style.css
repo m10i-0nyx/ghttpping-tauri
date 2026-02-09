@@ -148,6 +148,20 @@ main {
     transform: translateY(0);
 }
 
+.btn-primary:disabled {
+    background: #cccccc;
+    color: #666666;
+    cursor: not-allowed;
+    opacity: 0.6;
+    transform: none;
+}
+
+.btn-primary:disabled:hover {
+    background: #cccccc;
+    transform: none;
+    box-shadow: var(--shadow);
+}
+
 .btn-secondary {
     background: var(--color-text-light);
     color: white;

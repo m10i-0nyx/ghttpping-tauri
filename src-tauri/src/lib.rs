@@ -31,6 +31,13 @@ pub struct HttpPingResult {
     pub error_message: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HttpPingDualResult {
+    pub url: String,
+    pub ipv4: HttpPingResult,
+    pub ipv6: HttpPingResult,
+}
+
 #[tauri::command]
 async fn environment_check() -> Result<EnvironmentCheckResult, String> {
     let mut result = EnvironmentCheckResult {
@@ -175,6 +182,123 @@ async fn ping_http(
     })
 }
 
+#[tauri::command]
+async fn ping_http_dual(
+    url: String,
+    ignore_tls_errors: bool,
+) -> Result<HttpPingDualResult, String> {
+    // IPv4 限定テスト
+    let ipv4_result = ping_http_with_ip_version(url.clone(), ignore_tls_errors, 4).await;
+
+    // IPv6 限定テスト
+    let ipv6_result = ping_http_with_ip_version(url.clone(), ignore_tls_errors, 6).await;
+
+    Ok(HttpPingDualResult {
+        url,
+        ipv4: ipv4_result,
+        ipv6: ipv6_result,
+    })
+}
+
+async fn ping_http_with_ip_version(
+    url: String,
+    ignore_tls_errors: bool,
+    ip_version: u32,
+) -> HttpPingResult {
+    let start = Instant::now();
+
+    // URLの検証
+    let parsed_url = match reqwest::Url::parse(&url) {
+        Ok(u) => u,
+        Err(e) => {
+            return HttpPingResult {
+                url: url.clone(),
+                status_code: None,
+                response_time_ms: None,
+                success: false,
+                error_message: Some(format!("無効なURL: {}", e)),
+            };
+        }
+    };
+
+    // HTTPクライアントの構築（IP バージョン指定）
+    let client = if ignore_tls_errors {
+        match reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_secs(30))
+            .local_address(if ip_version == 4 {
+                Some("0.0.0.0".parse().unwrap())
+            } else {
+                Some("::".parse().unwrap())
+            })
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return HttpPingResult {
+                    url: url.clone(),
+                    status_code: None,
+                    response_time_ms: None,
+                    success: false,
+                    error_message: Some(format!("HTTPクライアント作成失敗: {}", e)),
+                };
+            }
+        }
+    } else {
+        match reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .local_address(if ip_version == 4 {
+                Some("0.0.0.0".parse().unwrap())
+            } else {
+                Some("::".parse().unwrap())
+            })
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return HttpPingResult {
+                    url: url.clone(),
+                    status_code: None,
+                    response_time_ms: None,
+                    success: false,
+                    error_message: Some(format!("HTTPクライアント作成失敗: {}", e)),
+                };
+            }
+        }
+    };
+
+    // HTTPリクエスト
+    let response = match client.get(parsed_url.as_str()).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            return HttpPingResult {
+                url: url.clone(),
+                status_code: None,
+                response_time_ms: Some(elapsed),
+                success: false,
+                error_message: Some(format!("接続エラー: {}", e)),
+            };
+        }
+    };
+
+    let elapsed = start.elapsed().as_millis() as u64;
+    let status_code = response.status().as_u16();
+    let success = response.status().is_success();
+
+    HttpPingResult {
+        url: url.clone(),
+        status_code: Some(status_code),
+        response_time_ms: Some(elapsed),
+        success,
+        error_message: if success {
+            None
+        } else {
+            Some(format!("HTTPステータス: {}", status_code))
+        },
+    }
+}
+
 // ネットワークインターフェース情報を取得
 fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
     use std::process::Command;
@@ -311,7 +435,7 @@ async fn check_dns_resolution() -> Result<bool, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![environment_check, ping_http])
+        .invoke_handler(tauri::generate_handler![environment_check, ping_http, ping_http_dual])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

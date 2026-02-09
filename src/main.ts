@@ -26,8 +26,15 @@ interface HttpPingResult {
     error_message?: string;
 }
 
+interface HttpPingDualResult {
+    url: string;
+    ipv4: HttpPingResult;
+    ipv6: HttpPingResult;
+}
+
 let lastEnvResult: EnvironmentCheckResult | null = null;
-let lastPingResult: HttpPingResult | null = null;
+let lastPingDualResult: HttpPingDualResult | null = null;
+let environmentCheckCompleted: boolean = false;
 
 // DOMが読み込まれたら初期化
 window.addEventListener("DOMContentLoaded", () => {
@@ -42,6 +49,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
     if (pingBtn) {
         pingBtn.addEventListener("click", performHttpPing);
+        // 初期状態で無効化
+        updatePingButtonState();
     }
 
     if (mailtoBtn) {
@@ -58,6 +67,18 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 });
 
+// ピングボタンの状態を更新
+function updatePingButtonState() {
+    const pingBtn = document.getElementById("ping-btn");
+    if (!pingBtn) return;
+
+    if (environmentCheckCompleted) {
+        pingBtn.removeAttribute("disabled");
+    } else {
+        pingBtn.setAttribute("disabled", "true");
+    }
+}
+
 // 環境チェックを実行
 async function checkEnvironment() {
     const resultDiv = document.getElementById("env-result");
@@ -68,6 +89,10 @@ async function checkEnvironment() {
     try {
         const result = (await invoke("environment_check")) as EnvironmentCheckResult;
         lastEnvResult = result;
+
+        // 環境チェック完了状態を更新
+        environmentCheckCompleted = true;
+        updatePingButtonState();
 
         let html = "";
 
@@ -122,6 +147,9 @@ async function checkEnvironment() {
         resultDiv.innerHTML = html;
     } catch (error) {
         resultDiv.innerHTML = `<div class="error">エラーが発生しました: ${error}</div>`;
+        // エラーの場合は完了状態をリセット
+        environmentCheckCompleted = false;
+        updatePingButtonState();
     }
 }
 
@@ -133,6 +161,13 @@ async function performHttpPing() {
 
     if (!urlInput || !resultDiv) return;
 
+    // 環境チェック完了確認
+    if (!environmentCheckCompleted) {
+        resultDiv.innerHTML =
+            '<div class="error">❌ 先に「環境チェック」を実行してください</div>';
+        return;
+    }
+
     const url = urlInput.value.trim();
     if (!url) {
         resultDiv.innerHTML = '<div class="error">URLを入力してください</div>';
@@ -142,38 +177,73 @@ async function performHttpPing() {
     resultDiv.innerHTML = '<div class="loading">疎通確認中...</div>';
 
     try {
-        const result = (await invoke("ping_http", {
+        const result = (await invoke("ping_http_dual", {
             url,
             ignoreTlsErrors: false,
-        })) as HttpPingResult;
+        })) as HttpPingDualResult;
 
-        lastPingResult = result;
+        lastPingDualResult = result;
 
         let html = "";
 
-        if (result.success) {
+        // 概要表示
+        const ipv4Success = result.ipv4.success;
+        const ipv6Success = result.ipv6.success;
+
+        if (ipv4Success || ipv6Success) {
             html += '<div class="success">✅ 疎通確認成功</div>';
         } else {
             html += '<div class="error">❌ 疎通確認失敗</div>';
         }
 
         html += "<h3>結果詳細</h3>";
-        html += "<ul>";
-        html += `<li><strong>URL:</strong> ${result.url}</li>`;
+        html += "<div style='display: grid; grid-template-columns: 1fr 1fr; gap: 15px;'>";
 
-        if (result.status_code !== undefined) {
-            html += `<li><strong>ステータスコード:</strong> ${result.status_code}</li>`;
+        // IPv4 結果
+        html += "<div style='border: 1px solid #e0e0e0; padding: 15px; border-radius: 4px;'>";
+        html += "<h4 style='color: #4a90e2; margin-bottom: 10px;'>📡 IPv4限定</h4>";
+        if (result.ipv4.success) {
+            html += '<div style="color: #4caf50; font-weight: 600; margin-bottom: 10px;">✅ 接続成功</div>';
+        } else {
+            html += '<div style="color: #f44336; font-weight: 600; margin-bottom: 10px;">❌ 接続失敗</div>';
         }
-
-        if (result.response_time_ms !== undefined) {
-            html += `<li><strong>レスポンス時間:</strong> ${result.response_time_ms} ms</li>`;
+        html += "<ul style='margin: 0; padding: 0 0 0 20px;'>";
+        html += `<li><strong>URL:</strong> ${result.ipv4.url}</li>`;
+        if (result.ipv4.status_code !== undefined) {
+            html += `<li><strong>ステータスコード:</strong> ${result.ipv4.status_code}</li>`;
         }
-
-        if (result.error_message) {
-            html += `<li><strong>エラー:</strong> ${result.error_message}</li>`;
+        if (result.ipv4.response_time_ms !== undefined) {
+            html += `<li><strong>レスポンス時間:</strong> ${result.ipv4.response_time_ms} ms</li>`;
         }
-
+        if (result.ipv4.error_message) {
+            html += `<li><strong>エラー:</strong> ${result.ipv4.error_message}</li>`;
+        }
         html += "</ul>";
+        html += "</div>";
+
+        // IPv6 結果
+        html += "<div style='border: 1px solid #e0e0e0; padding: 15px; border-radius: 4px;'>";
+        html += "<h4 style='color: #4a90e2; margin-bottom: 10px;'>📡 IPv6限定</h4>";
+        if (result.ipv6.success) {
+            html += '<div style="color: #4caf50; font-weight: 600; margin-bottom: 10px;">✅ 接続成功</div>';
+        } else {
+            html += '<div style="color: #f44336; font-weight: 600; margin-bottom: 10px;">❌ 接続失敗</div>';
+        }
+        html += "<ul style='margin: 0; padding: 0 0 0 20px;'>";
+        html += `<li><strong>URL:</strong> ${result.ipv6.url}</li>`;
+        if (result.ipv6.status_code !== undefined) {
+            html += `<li><strong>ステータスコード:</strong> ${result.ipv6.status_code}</li>`;
+        }
+        if (result.ipv6.response_time_ms !== undefined) {
+            html += `<li><strong>レスポンス時間:</strong> ${result.ipv6.response_time_ms} ms</li>`;
+        }
+        if (result.ipv6.error_message) {
+            html += `<li><strong>エラー:</strong> ${result.ipv6.error_message}</li>`;
+        }
+        html += "</ul>";
+        html += "</div>";
+
+        html += "</div>";
 
         resultDiv.innerHTML = html;
 
@@ -211,18 +281,32 @@ function sendMailto() {
         }
     }
 
-    if (lastPingResult) {
+    if (lastPingDualResult) {
         body += "■ 疎通確認結果\n";
-        body += `URL: ${lastPingResult.url}\n`;
-        body += `結果: ${lastPingResult.success ? "成功" : "失敗"}\n`;
-        if (lastPingResult.status_code !== undefined) {
-            body += `ステータスコード: ${lastPingResult.status_code}\n`;
+        body += `URL: ${lastPingDualResult.url}\n\n`;
+
+        body += "【IPv4限定テスト】\n";
+        body += `結果: ${lastPingDualResult.ipv4.success ? "成功" : "失敗"}\n`;
+        if (lastPingDualResult.ipv4.status_code !== undefined) {
+            body += `ステータスコード: ${lastPingDualResult.ipv4.status_code}\n`;
         }
-        if (lastPingResult.response_time_ms !== undefined) {
-            body += `レスポンス時間: ${lastPingResult.response_time_ms} ms\n`;
+        if (lastPingDualResult.ipv4.response_time_ms !== undefined) {
+            body += `レスポンス時間: ${lastPingDualResult.ipv4.response_time_ms} ms\n`;
         }
-        if (lastPingResult.error_message) {
-            body += `エラー: ${lastPingResult.error_message}\n`;
+        if (lastPingDualResult.ipv4.error_message) {
+            body += `エラー: ${lastPingDualResult.ipv4.error_message}\n`;
+        }
+
+        body += "\n【IPv6限定テスト】\n";
+        body += `結果: ${lastPingDualResult.ipv6.success ? "成功" : "失敗"}\n`;
+        if (lastPingDualResult.ipv6.status_code !== undefined) {
+            body += `ステータスコード: ${lastPingDualResult.ipv6.status_code}\n`;
+        }
+        if (lastPingDualResult.ipv6.response_time_ms !== undefined) {
+            body += `レスポンス時間: ${lastPingDualResult.ipv6.response_time_ms} ms\n`;
+        }
+        if (lastPingDualResult.ipv6.error_message) {
+            body += `エラー: ${lastPingDualResult.ipv6.error_message}\n`;
         }
     }
 

@@ -33,22 +33,23 @@
               value="https://example.com"
             />
           </div>
-          <button id="ping-btn" class="btn-primary">疎通確認を実行</button>
+          <button id="ping-btn" class="btn-primary" disabled>疎通確認を実行</button>
+          <p class="help-text">※環境チェック完了後に有効になります</p>
           <div id="ping-result" class="result-area"></div>
         </section>
 
         <!-- 結果出力セクション -->
         <section class="card">
           <h2>結果をメール送信</h2>
-          <button id="mailto-btn" class="btn-secondary" disabled>
+          <button id="mailto-btn" class="btn-primary" disabled>
             結果をメールで送信
           </button>
-          <p class="help-text">※疎通確認を実行すると有効になります</p>
+          <p class="help-text">※疎通確認完了後に有効になります</p>
         </section>
       </main>
 
       <footer>
-        <p>© 2026 ghttpping-windows | Windows 11専用アプリ</p>
+        <p>© 2026 0nyx.net</p>
       </footer>
     </div>
 
