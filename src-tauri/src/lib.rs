@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkAdapter {
@@ -39,6 +41,12 @@ pub struct EnvironmentCheckResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct DnsResolution {
+    pub ipv4_addresses: Vec<String>,
+    pub ipv6_addresses: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HttpPingResult {
     pub url: String,
     pub ip_address: Option<String>,
@@ -49,17 +57,18 @@ pub struct HttpPingResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct DnsResolution {
-    pub ipv4_addresses: Vec<String>,
-    pub ipv6_addresses: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct HttpPingDualResult {
     pub url: String,
     pub dns_resolution: DnsResolution,
     pub ipv4: HttpPingResult,
     pub ipv6: HttpPingResult,
+}
+
+// IP取得用の内部構造体
+#[derive(Deserialize)]
+struct IpResponse {
+    client_host: String,
+    datetime_jst: String,
 }
 
 #[tauri::command]
@@ -89,7 +98,7 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
     }
 
     // IPv4接続確認（グローバルIP取得で兼ねる）
-    match fetch_global_ipv4_info().await {
+    match fetch_global_ip_info("https://getipv4.0nyx.net/json", 10).await {
         Ok(info) => {
             result.ipv4_connectivity = true;
             result.ipv4_global_ip = Some(info);
@@ -101,7 +110,7 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
     }
 
     // IPv6接続確認（グローバルIP取得で兼ねる）
-    match fetch_global_ipv6_info().await {
+    match fetch_global_ip_info("https://getipv6.0nyx.net/json", 10).await {
         Ok(info) => {
             result.ipv6_connectivity = true;
             result.ipv6_global_ip = Some(info);
@@ -137,7 +146,7 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
     }
 
     // インターネット接続判定
-    result.internet_available = result.ipv4_connectivity || result.ipv6_connectivity
+    result.internet_available = (result.ipv4_connectivity || result.ipv6_connectivity)
         && result.dns_resolution;
 
     Ok(result)
@@ -148,9 +157,13 @@ async fn ping_http(
     url: String,
     ignore_tls_errors: bool,
 ) -> Result<HttpPingResult, String> {
-    let start = Instant::now();
+    if ignore_tls_errors {
+        log_security_warning("TLS証明書検証が無効化されています");
+    }
 
-    // URLの検証
+    validate_url(&url)?;
+
+    let start = Instant::now();
     let parsed_url = match reqwest::Url::parse(&url) {
         Ok(u) => u,
         Err(e) => {
@@ -165,7 +178,6 @@ async fn ping_http(
         }
     };
 
-    // HTTPクライアントの構築
     let client = if ignore_tls_errors {
         reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
@@ -191,7 +203,6 @@ async fn ping_http(
         }
     };
 
-    // HTTPリクエスト
     let response = match client.get(parsed_url.as_str()).send().await {
         Ok(resp) => resp,
         Err(e) => {
@@ -212,7 +223,7 @@ async fn ping_http(
     let success = response.status().is_success();
 
     Ok(HttpPingResult {
-        url: url.clone(),
+        url,
         ip_address: None,
         status_code: Some(status_code),
         response_time_ms: Some(elapsed),
@@ -230,12 +241,15 @@ async fn ping_http_dual(
     url: String,
     ignore_tls_errors: bool,
 ) -> Result<HttpPingDualResult, String> {
-    // URLの検証
+    if ignore_tls_errors {
+        log_security_warning("TLS証明書検証が無効化されています");
+    }
+
+    validate_url(&url)?;
+
     let parsed_url = match reqwest::Url::parse(&url) {
         Ok(u) => u,
-        Err(e) => {
-            return Err(format!("無効なURL: {}", e));
-        }
+        Err(e) => return Err(format!("無効なURL: {}", e)),
     };
 
     let host = match parsed_url.host_str() {
@@ -243,52 +257,31 @@ async fn ping_http_dual(
         None => return Err("URLからホスト名を抽出できません".to_string()),
     };
 
-    // ステップ1: DNS名前解決 (IPv4とIPv6)
+    // ホスト名の検証（セキュリティ）
+    validate_hostname(host)?;
+
+    // DNS名前解決
     let dns_result = resolve_dns(host).await;
     let ipv4_addresses = dns_result.ipv4_addresses.clone();
     let ipv6_addresses = dns_result.ipv6_addresses.clone();
 
-    // ステップ2: IPv4アドレスへのHTTP接続
-    let ipv4_result = if !ipv4_addresses.is_empty() {
+    // IPv4/IPv6への並列接続試行
+    let (ipv4_result, ipv6_result) = tokio::join!(
         connect_to_ip_with_host(
             url.clone(),
-            &ipv4_addresses[0],
+            &ipv4_addresses,
             host,
             ignore_tls_errors,
             parsed_url.port(),
-        )
-        .await
-    } else {
-        HttpPingResult {
-            url: url.clone(),
-            ip_address: None,
-            status_code: None,
-            response_time_ms: None,
-            success: false,
-            error_message: Some("IPv4アドレスが見つかりません".to_string()),
-        }
-    };
-
-    // ステップ3: IPv6アドレスへのHTTP接続
-    let ipv6_result = if !ipv6_addresses.is_empty() {
+        ),
         connect_to_ip_with_host(
             url.clone(),
-            &ipv6_addresses[0],
+            &ipv6_addresses,
             host,
             ignore_tls_errors,
             parsed_url.port(),
-        )
-        .await
-    } else {
-        HttpPingResult {
-            url: url.clone(),
-            ip_address: None,
-            status_code: None,
-            response_time_ms: None,
-            success: false,
-            error_message: Some("IPv6アドレスが見つかりません".to_string()),
-        }
-    };
+        ),
+    );
 
     Ok(HttpPingDualResult {
         url,
@@ -306,7 +299,6 @@ async fn resolve_dns(host: &str) -> DnsResolution {
     let mut ipv4_addresses = Vec::new();
     let mut ipv6_addresses = Vec::new();
 
-    // ホスト名をIPアドレスに解決
     let socket_addr = format!("{}:80", host);
 
     match lookup_host(&socket_addr).await {
@@ -314,10 +306,16 @@ async fn resolve_dns(host: &str) -> DnsResolution {
             for addr in addrs {
                 match addr.ip() {
                     IpAddr::V4(ipv4) => {
-                        ipv4_addresses.push(ipv4.to_string());
+                        let ip_str = ipv4.to_string();
+                        if !ipv4_addresses.contains(&ip_str) {
+                            ipv4_addresses.push(ip_str);
+                        }
                     }
                     IpAddr::V6(ipv6) => {
-                        ipv6_addresses.push(ipv6.to_string());
+                        let ip_str = ipv6.to_string();
+                        if !ipv6_addresses.contains(&ip_str) {
+                            ipv6_addresses.push(ip_str);
+                        }
                     }
                 }
             }
@@ -336,29 +334,55 @@ async fn resolve_dns(host: &str) -> DnsResolution {
 // 指定されたIPアドレスにHTTP接続（curl コマンドを使用・SNI対応）
 async fn connect_to_ip_with_host(
     original_url: String,
+    ip_addresses: &[String],
+    host: &str,
+    ignore_tls_errors: bool,
+    port: Option<u16>,
+) -> HttpPingResult {
+    // IPアドレスが存在しない場合
+    if ip_addresses.is_empty() {
+        let is_https = original_url.starts_with("https");
+        return HttpPingResult {
+            url: original_url,
+            ip_address: None,
+            status_code: None,
+            response_time_ms: None,
+            success: false,
+            error_message: Some(
+                if is_https {
+                    "IPv6アドレスが見つかりません".to_string()
+                } else {
+                    "IPv4アドレスが見つかりません".to_string()
+                }
+            ),
+        };
+    }
+
+    // 最初のIPアドレスを使用して接続を試行
+    let ip_address = &ip_addresses[0];
+    perform_curl_request(&original_url, ip_address, host, ignore_tls_errors, port).await
+}
+
+// curlを使用したHTTPリクエスト実行
+async fn perform_curl_request(
+    original_url: &str,
     ip_address: &str,
     host: &str,
     ignore_tls_errors: bool,
     port: Option<u16>,
 ) -> HttpPingResult {
-    use std::process::Command;
-
     let start = Instant::now();
 
     let is_https = original_url.starts_with("https");
-    let _scheme = if is_https { "https" } else { "http" };
     let default_port = if is_https { 443 } else { 80 };
     let port_num = port.unwrap_or(default_port);
 
-    // --resolve オプションにはIPv6は角括弧で囲む
+    // --resolveオプションの構築（IPv6は角括弧で囲む）
     let resolve_arg = if ip_address.contains(':') {
         format!("{}:{}:[{}]", host, port_num, ip_address)
     } else {
         format!("{}:{}:{}", host, port_num, ip_address)
     };
-
-    // 元のURLでのリクエスト（SNI用）
-    let request_url = original_url.clone();
 
     let mut cmd_args = vec![
         "--resolve".to_string(),
@@ -376,10 +400,12 @@ async fn connect_to_ip_with_host(
         cmd_args.push("-k".to_string());
     }
 
-    cmd_args.push(request_url.clone());
+    cmd_args.push(original_url.to_string());
 
     let output = Command::new("curl.exe")
         .args(&cmd_args)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
         .output();
 
     let elapsed = start.elapsed().as_millis() as u64;
@@ -393,7 +419,7 @@ async fn connect_to_ip_with_host(
                 if let Ok(status_code) = status_code_str.parse::<u16>() {
                     let success = status_code >= 200 && status_code < 300;
                     HttpPingResult {
-                        url: original_url,
+                        url: original_url.to_string(),
                         ip_address: Some(ip_address.to_string()),
                         status_code: Some(status_code),
                         response_time_ms: Some(elapsed),
@@ -406,7 +432,7 @@ async fn connect_to_ip_with_host(
                     }
                 } else {
                     HttpPingResult {
-                        url: original_url,
+                        url: original_url.to_string(),
                         ip_address: Some(ip_address.to_string()),
                         status_code: None,
                         response_time_ms: Some(elapsed),
@@ -415,7 +441,6 @@ async fn connect_to_ip_with_host(
                     }
                 }
             } else {
-                // エラーメッセージをstderr と status から取得
                 let error_msg = if !stderr_str.is_empty() {
                     stderr_str
                 } else {
@@ -423,7 +448,7 @@ async fn connect_to_ip_with_host(
                 };
 
                 HttpPingResult {
-                    url: original_url,
+                    url: original_url.to_string(),
                     ip_address: Some(ip_address.to_string()),
                     status_code: None,
                     response_time_ms: Some(elapsed),
@@ -432,28 +457,27 @@ async fn connect_to_ip_with_host(
                 }
             }
         }
-        Err(e) => {
-            HttpPingResult {
-                url: original_url,
-                ip_address: Some(ip_address.to_string()),
-                status_code: None,
-                response_time_ms: Some(elapsed),
-                success: false,
-                error_message: Some(format!("curl 実行失敗: {}", e)),
-            }
-        }
+        Err(e) => HttpPingResult {
+            url: original_url.to_string(),
+            ip_address: Some(ip_address.to_string()),
+            status_code: None,
+            response_time_ms: Some(elapsed),
+            success: false,
+            error_message: Some(format!("curl 実行失敗: {}", e)),
+        },
     }
 }
 
-// ネットワークインターフェース情報を取得
+// ネットワークインターフェース情報を取得（セキュリティ強化版）
 fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
-    use std::process::Command;
-
     let output = Command::new("powershell")
         .args(&[
+            "-NoProfile",
             "-Command",
             "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object -ExpandProperty Name",
         ])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
         .output()
         .map_err(|e| format!("PowerShellコマンド実行失敗: {}", e))?;
 
@@ -470,47 +494,33 @@ fn get_network_interfaces() -> Result<Vec<NetworkAdapter>, String> {
             continue;
         }
 
+        // アダプタ名のサニタイズ（基本的なチェック）
+        if !is_valid_adapter_name(name) {
+            eprintln!("Invalid adapter name: {}", name);
+            continue;
+        }
+
         // 各アダプタのIPアドレスを取得
+        let get_ip_cmd = format!(
+            "Get-NetIPAddress -InterfaceAlias '{}' | Where-Object {{$_.PrefixOrigin -ne 'WellKnown'}} | Select-Object -ExpandProperty IPAddress",
+            name
+        );
+
         let ip_output = Command::new("powershell")
-            .args(&[
-                "-Command",
-                &format!(
-                    "Get-NetIPAddress -InterfaceAlias '{}' | Select-Object -ExpandProperty IPAddress",
-                    name
-                ),
-            ])
+            .args(&["-NoProfile", "-Command", &get_ip_cmd])
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
             .output();
 
         if let Ok(ip_out) = ip_output {
             let ip_addresses: Vec<String> = String::from_utf8_lossy(&ip_out.stdout)
                 .lines()
                 .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty() && is_valid_ip_address(s))
                 .collect();
 
-            let mut has_ipv4 = false;
-            let mut has_ipv6 = false;
-            let mut has_ipv4_global = false;
-            let mut has_ipv6_global = false;
-
-            for ip_str in &ip_addresses {
-                if let Ok(ip) = ip_str.parse::<IpAddr>() {
-                    match ip {
-                        IpAddr::V4(v4) => {
-                            has_ipv4 = true;
-                            if is_global_ipv4(&v4) {
-                                has_ipv4_global = true;
-                            }
-                        }
-                        IpAddr::V6(v6) => {
-                            has_ipv6 = true;
-                            if is_global_ipv6(&v6) {
-                                has_ipv6_global = true;
-                            }
-                        }
-                    }
-                }
-            }
+            let (has_ipv4, has_ipv6, has_ipv4_global, has_ipv6_global) =
+                analyze_ip_addresses(&ip_addresses);
 
             adapters.push(NetworkAdapter {
                 name: name.to_string(),
@@ -541,10 +551,8 @@ fn is_global_ipv6(ip: &Ipv6Addr) -> bool {
     !ip.is_loopback() && !ip.is_multicast() && !ip.is_unspecified()
 }
 
-// IPv4接続確認
-async fn check_ipv4_connectivity() -> Result<bool, String> {
-    use std::process::Command;
-
+// IPv4/IPv6接続確認（汎用関数）
+async fn check_connectivity(url: &str, timeout_secs: u64) -> Result<bool, String> {
     let output = Command::new("curl.exe")
         .args(&[
             "-s",
@@ -553,52 +561,46 @@ async fn check_ipv4_connectivity() -> Result<bool, String> {
             "-w",
             "%{http_code}",
             "-m",
-            "10",
-            "https://getipv4.0nyx.net/json",
+            &timeout_secs.to_string(),
+            url,
         ])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
         .output()
-        .map_err(|e| format!("curl 実行失敗: {}", e))?;
+        .map_err(|e| format!("curl実行失敗: {}", e))?;
 
     if !output.status.success() {
         return Ok(false);
     }
 
     let status_code_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if let Ok(status_code) = status_code_str.parse::<u16>() {
-        Ok(status_code >= 200 && status_code < 300)
-    } else {
-        Ok(false)
+    match status_code_str.parse::<u16>() {
+        Ok(status_code) => Ok(status_code >= 200 && status_code < 300),
+        Err(_) => Ok(false),
     }
 }
 
-// IPv6接続確認
-async fn check_ipv6_connectivity() -> Result<bool, String> {
-    use std::process::Command;
-
+// グローバルIP情報取得（汎用関数）
+async fn fetch_global_ip_info(url: &str, timeout_secs: u64) -> Result<GlobalIPInfo, String> {
     let output = Command::new("curl.exe")
-        .args(&[
-            "-s",
-            "-o",
-            "nul",
-            "-w",
-            "%{http_code}",
-            "-m",
-            "10",
-            "https://getipv6.0nyx.net/",
-        ])
+        .args(&["-s", "-m", &timeout_secs.to_string(), url])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
         .output()
-        .map_err(|e| format!("curl 実行失敗: {}", e))?;
+        .map_err(|e| format!("curl実行失敗: {}", e))?;
 
     if !output.status.success() {
-        return Ok(false);
+        return Err("グローバルIP取得失敗".to_string());
     }
 
-    let status_code_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if let Ok(status_code) = status_code_str.parse::<u16>() {
-        Ok(status_code >= 200 && status_code < 300)
-    } else {
-        Ok(false)
-    }
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let body: IpResponse = serde_json::from_str(&json_str)
+        .map_err(|e| format!("JSON解析失敗: {}", e))?;
+
+    Ok(GlobalIPInfo {
+        client_host: body.client_host,
+        datetime_jst: body.datetime_jst,
+    })
 }
 
 // DNS解決確認
@@ -611,47 +613,39 @@ async fn check_dns_resolution() -> Result<bool, String> {
     }
 }
 
-// DNSサーバ情報を取得
+// DNS サーバ情報の取得
 fn get_dns_servers() -> Result<Vec<DnsServerInfo>, String> {
-    // 最初に ipconfig /all を試す（最も確実）
+    // ipconfig /all を優先的に使用（最も確実）
     match parse_dns_from_ipconfig() {
-        Ok(result) if !result.is_empty() => {
-            return Ok(result);
-        }
-        _ => {
-            // ipconfig で失敗した場合、PowerShell を試す
-            return get_dns_servers_from_powershell();
-        }
+        Ok(result) if !result.is_empty() => Ok(result),
+        _ => get_dns_servers_from_powershell(),
     }
 }
 
 // PowerShell を使用して DNS サーバ情報を取得
 fn get_dns_servers_from_powershell() -> Result<Vec<DnsServerInfo>, String> {
-    use std::process::Command;
-
-    // Get-NetAdapter で取得してから、各アダプタの DNS を取得
     let ps_command = r#"Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | ForEach-Object {
         $iface = $_.Name
-        Get-DnsClientServerAddress -InterfaceAlias $iface -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ServerAddresses | ForEach-Object { "$iface : $_" }
+        Get-DnsClientServerAddress -InterfaceAlias $iface -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty ServerAddresses |
+        ForEach-Object { "$iface : $_" }
     }"#;
 
     let output = Command::new("powershell")
-        .args(&["-Command", ps_command])
+        .args(&["-NoProfile", "-Command", ps_command])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
         .output()
         .map_err(|e| format!("PowerShellコマンド実行失敗: {}", e))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("DNS サーバ取得 PowerShell エラー: {}", stderr);
         return Err("DNSサーバ情報の取得に失敗しました".to_string());
     }
 
     let output_str = String::from_utf8_lossy(&output.stdout);
     let mut result = Vec::new();
-    let mut current_adapter_map: std::collections::HashMap<String, (Vec<String>, Vec<String>)> =
-        std::collections::HashMap::new();
+    let mut current_adapter_map: HashMap<String, (Vec<String>, Vec<String>)> = HashMap::new();
 
-    // 出力をパース: "InterfaceName : IP_Address" 形式
     for line in output_str.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -677,7 +671,6 @@ fn get_dns_servers_from_powershell() -> Result<Vec<DnsServerInfo>, String> {
         }
     }
 
-    // HashMap を DnsServerInfo に変換
     for (adapter_name, (ipv4_addrs, ipv6_addrs)) in current_adapter_map {
         if !ipv4_addrs.is_empty() || !ipv6_addrs.is_empty() {
             result.push(DnsServerInfo {
@@ -695,12 +688,12 @@ fn get_dns_servers_from_powershell() -> Result<Vec<DnsServerInfo>, String> {
     Ok(result)
 }
 
-// フォールバック: ipconfig /all から DNS サーバ情報を取得
+// ipconfig /all から DNS サーバ情報を取得
 fn parse_dns_from_ipconfig() -> Result<Vec<DnsServerInfo>, String> {
-    use std::process::Command;
-
     let output = Command::new("ipconfig")
         .args(&["/all"])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
         .output()
         .map_err(|e| format!("ipconfig コマンド実行失敗: {}", e))?;
 
@@ -719,7 +712,6 @@ fn parse_dns_from_ipconfig() -> Result<Vec<DnsServerInfo>, String> {
         let trimmed = line.trim();
 
         // アダプタ行の検出
-        // 行頭にスペースがなく、「アダプター」または「adapter」を含み、「:」を含む行
         if !line.starts_with(' ')
             && !line.is_empty()
             && (line_lower.contains("アダプター") || line_lower.contains("adapter"))
@@ -739,10 +731,8 @@ fn parse_dns_from_ipconfig() -> Result<Vec<DnsServerInfo>, String> {
             // 新しいアダプタ情報を抽出
             if let Some(pos) = line.find(':') {
                 let adapter_name = line[..pos].trim().to_string();
-                // "イーサネット アダプター xxx:" 形式から "xxx" を抽出
-                // または "Ethernet adapter xxx:" 形式から "xxx" を抽出
                 let extracted_name = if let Some(name_start) = adapter_name.to_lowercase().find("アダプター ") {
-                    adapter_name[name_start + 5..].to_string() // "アダプター " は5文字
+                    adapter_name[name_start + 5..].to_string()
                 } else if let Some(name_start) = adapter_name.to_lowercase().find("adapter ") {
                     adapter_name[name_start + 8..].to_string()
                 } else {
@@ -753,36 +743,41 @@ fn parse_dns_from_ipconfig() -> Result<Vec<DnsServerInfo>, String> {
                 current_ipv4_dns.clear();
                 current_ipv6_dns.clear();
             }
-        } else if current_adapter.is_some() && (line_lower.contains("dns サーバー") || line_lower.contains("dns servers")) && line.contains(':') {
+        } else if current_adapter.is_some()
+            && (line_lower.contains("dns サーバー") || line_lower.contains("dns servers"))
+            && line.contains(':')
+        {
             // DNS サーバー行
             if let Some(pos) = line.find(':') {
                 let dns_part = line[pos + 1..].trim();
                 if !dns_part.is_empty() && is_ip_address_like(dns_part) {
                     let colon_count = dns_part.matches(':').count();
                     if colon_count > 1 {
-                        // IPv6
-                        current_ipv6_dns.push(dns_part.to_string());
+                        if !current_ipv6_dns.contains(&dns_part.to_string()) {
+                            current_ipv6_dns.push(dns_part.to_string());
+                        }
                     } else if dns_part.contains('.') {
-                        // IPv4
-                        current_ipv4_dns.push(dns_part.to_string());
+                        if !current_ipv4_dns.contains(&dns_part.to_string()) {
+                            current_ipv4_dns.push(dns_part.to_string());
+                        }
                     }
                 }
             }
-        } else if current_adapter.is_some() && line.starts_with(' ') && !trimmed.is_empty() {
+        } else if current_adapter.is_some()
+            && line.starts_with(' ')
+            && !trimmed.is_empty()
+            && !line.contains(" . ")
+            && is_ip_address_like(trimmed)
+        {
             // DNS サーバーの継続行（インデント付き）
-            // ただし「. . . .」が含まれていない行のみ（属性行ではない）
-            if !line.contains(" . ") && is_ip_address_like(trimmed) {
-                let colon_count = trimmed.matches(':').count();
-                if colon_count > 1 {
-                    // IPv6
-                    if !current_ipv6_dns.contains(&trimmed.to_string()) {
-                        current_ipv6_dns.push(trimmed.to_string());
-                    }
-                } else if trimmed.contains('.') {
-                    // IPv4
-                    if !current_ipv4_dns.contains(&trimmed.to_string()) {
-                        current_ipv4_dns.push(trimmed.to_string());
-                    }
+            let colon_count = trimmed.matches(':').count();
+            if colon_count > 1 {
+                if !current_ipv6_dns.contains(&trimmed.to_string()) {
+                    current_ipv6_dns.push(trimmed.to_string());
+                }
+            } else if trimmed.contains('.') {
+                if !current_ipv4_dns.contains(&trimmed.to_string()) {
+                    current_ipv4_dns.push(trimmed.to_string());
                 }
             }
         }
@@ -802,10 +797,65 @@ fn parse_dns_from_ipconfig() -> Result<Vec<DnsServerInfo>, String> {
     Ok(result)
 }
 
+
+// ============ セキュリティ・入力検証関数 ============
+
+// URLの検証
+fn validate_url(url: &str) -> Result<(), String> {
+    if url.is_empty() || url.len() > 2048 {
+        return Err("URLが空またはサイズが大きすぎます".to_string());
+    }
+
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URLは http:// または https:// で始まる必要があります".to_string());
+    }
+
+    Ok(())
+}
+
+// ホスト名の検証（コマンドインジェクション対策）
+fn validate_hostname(host: &str) -> Result<(), String> {
+    if host.is_empty() || host.len() > 255 {
+        return Err("ホスト名が無効です".to_string());
+    }
+
+    // 危険な文字列を検出
+    let dangerous_chars = ['$', '`', '|', '&', ';', '>', '<', '(', ')'];
+    if dangerous_chars.iter().any(|&c| host.contains(c)) {
+        return Err("ホスト名に無効な文字が含まれています".to_string());
+    }
+
+    Ok(())
+}
+
+// アダプタ名のサニタイズ
+fn is_valid_adapter_name(name: &str) -> bool {
+    // 基本的な長さチェック
+    if name.is_empty() || name.len() > 255 {
+        return false;
+    }
+
+    // 制御文字がないかチェック
+    name.chars().all(|c| !c.is_control())
+}
+
 // IP アドレスのようなパターンかどうかを判定
+fn is_valid_ip_address(s: &str) -> bool {
+    // パースして有効なIPか確認
+    match s.parse::<IpAddr>() {
+        Ok(ip) => {
+            // ローカルホストアドレスはフィルタリング
+            match ip {
+                IpAddr::V4(v4) => !v4.is_loopback(),
+                IpAddr::V6(v6) => !v6.is_loopback(),
+            }
+        }
+        Err(_) => false,
+    }
+}
+
+// IP アドレスのようなパターンかどうかを判定（一般的な確認）
 fn is_ip_address_like(s: &str) -> bool {
-    // IPv4: 3つ以上のドット + 数字
-    // IPv6: 2つ以上のコロン + 16進数
     let dot_count = s.matches('.').count();
     let colon_count = s.matches(':').count();
     let has_hex = s.chars().any(|c| c.is_ascii_hexdigit());
@@ -814,72 +864,38 @@ fn is_ip_address_like(s: &str) -> bool {
     (dot_count >= 3 && has_digit) || (colon_count >= 2 && has_hex)
 }
 
-// グローバルIPv4情報の取得
-async fn fetch_global_ipv4_info() -> Result<GlobalIPInfo, String> {
-    use std::process::Command;
+// IP アドレス分析
+fn analyze_ip_addresses(ip_addresses: &[String]) -> (bool, bool, bool, bool) {
+    let mut has_ipv4 = false;
+    let mut has_ipv6 = false;
+    let mut has_ipv4_global = false;
+    let mut has_ipv6_global = false;
 
-    #[derive(Deserialize)]
-    struct IpResponse {
-        client_host: String,
-        datetime_jst: String,
+    for ip_str in ip_addresses {
+        if let Ok(ip) = ip_str.parse::<IpAddr>() {
+            match ip {
+                IpAddr::V4(v4) => {
+                    has_ipv4 = true;
+                    if is_global_ipv4(&v4) {
+                        has_ipv4_global = true;
+                    }
+                }
+                IpAddr::V6(v6) => {
+                    has_ipv6 = true;
+                    if is_global_ipv6(&v6) {
+                        has_ipv6_global = true;
+                    }
+                }
+            }
+        }
     }
 
-    let output = Command::new("curl.exe")
-        .args(&[
-            "-s",
-            "-m",
-            "10",
-            "https://getipv4.0nyx.net/json",
-        ])
-        .output()
-        .map_err(|e| format!("curl 実行失敗: {}", e))?;
-
-    if !output.status.success() {
-        return Err("IPv4グローバルIP取得失敗".to_string());
-    }
-
-    let json_str = String::from_utf8_lossy(&output.stdout);
-    let body: IpResponse = serde_json::from_str(&json_str)
-        .map_err(|e| format!("JSON解析失敗: {}", e))?;
-
-    Ok(GlobalIPInfo {
-        client_host: body.client_host,
-        datetime_jst: body.datetime_jst,
-    })
+    (has_ipv4, has_ipv6, has_ipv4_global, has_ipv6_global)
 }
 
-// グローバルIPv6情報の取得
-async fn fetch_global_ipv6_info() -> Result<GlobalIPInfo, String> {
-    use std::process::Command;
-
-    #[derive(Deserialize)]
-    struct IpResponse {
-        client_host: String,
-        datetime_jst: String,
-    }
-
-    let output = Command::new("curl.exe")
-        .args(&[
-            "-s",
-            "-m",
-            "10",
-            "https://getipv6.0nyx.net/json",
-        ])
-        .output()
-        .map_err(|e| format!("curl 実行失敗: {}", e))?;
-
-    if !output.status.success() {
-        return Err("IPv6グローバルIP取得失敗".to_string());
-    }
-
-    let json_str = String::from_utf8_lossy(&output.stdout);
-    let body: IpResponse = serde_json::from_str(&json_str)
-        .map_err(|e| format!("JSON解析失敗: {}", e))?;
-
-    Ok(GlobalIPInfo {
-        client_host: body.client_host,
-        datetime_jst: body.datetime_jst,
-    })
+// セキュリティ警告ログ
+fn log_security_warning(message: &str) {
+    eprintln!("⚠️  セキュリティ警告: {}", message);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
