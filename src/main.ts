@@ -381,6 +381,23 @@ async function performHttpPing() {
 async function saveResultAsTextFile() {
     let body = "=== ghttpping-tauri 疎通確認結果 ===\n\n";
 
+    // テキスト保存時にverboseログ付きで疎通確認を再実行
+    if (lastPingDualResult) {
+        try {
+            const ignoreTlsCheckbox = document.getElementById("ignore-tls-errors") as HTMLInputElement;
+            const ignoreTlsErrors = ignoreTlsCheckbox?.checked ?? false;
+            const verboseResult = (await invoke("ping_http_dual", {
+                url: lastPingDualResult.url,
+                ignoreTlsErrors,
+                saveVerboseLog: true,
+            })) as HttpPingDualResult;
+            // verboseログ付きの結果で上書き
+            lastPingDualResult = verboseResult;
+        } catch (error) {
+            console.error("Failed to fetch verbose logs:", error);
+        }
+    }
+
     if (lastEnvResult) {
         body += "■ 環境チェック結果\n";
         body += `インターネット接続: ${lastEnvResult.internet_available ? "可能" : "不可"}\n`;
@@ -491,6 +508,9 @@ async function saveResultAsTextFile() {
         if (lastPingDualResult.ipv4.error_message) {
             body += `エラー: ${lastPingDualResult.ipv4.error_message}\n`;
         }
+        if (lastPingDualResult.ipv4.verbose_log) {
+            body += `\n【curlログ (IPv4)】\n${lastPingDualResult.ipv4.verbose_log}\n`;
+        }
 
         body += "\n【IPv6限定テスト】\n";
         if (lastPingDualResult.ipv6.ip_address) {
@@ -505,6 +525,9 @@ async function saveResultAsTextFile() {
         }
         if (lastPingDualResult.ipv6.error_message) {
             body += `エラー: ${lastPingDualResult.ipv6.error_message}\n`;
+        }
+        if (lastPingDualResult.ipv6.verbose_log) {
+            body += `\n【curlログ (IPv6)】\n${lastPingDualResult.ipv6.verbose_log}\n`;
         }
     }
 
