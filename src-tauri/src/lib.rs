@@ -103,7 +103,7 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
     }
 
     // IPv4接続確認（グローバルIP取得で兼ねる）
-    match fetch_global_ip_info("https://getipv4.0nyx.net/json", 10).await {
+    match fetch_global_ip_info("https://getipv4.0nyx.net/json", 2).await {
         Ok(info) => {
             result.ipv4_connectivity = true;
             result.ipv4_global_ip = Some(info);
@@ -115,7 +115,7 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
     }
 
     // IPv6接続確認（グローバルIP取得で兼ねる）
-    match fetch_global_ip_info("https://getipv6.0nyx.net/json", 10).await {
+    match fetch_global_ip_info("https://getipv6.0nyx.net/json", 2).await {
         Ok(info) => {
             result.ipv6_connectivity = true;
             result.ipv6_global_ip = Some(info);
@@ -621,6 +621,7 @@ async fn check_connectivity(url: &str, timeout_secs: u64) -> Result<bool, String
 
 // グローバルIP情報取得（汎用関数）
 async fn fetch_global_ip_info(url: &str, timeout_secs: u64) -> Result<GlobalIPInfo, String> {
+    // 1回目: 通常のTLS検証で接続を試みる
     let output = Command::new("curl.exe")
         .args(&["-s", "-m", &timeout_secs.to_string(), url])
         .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
@@ -629,11 +630,26 @@ async fn fetch_global_ip_info(url: &str, timeout_secs: u64) -> Result<GlobalIPIn
         .output()
         .map_err(|e| format!("curl実行失敗: {}", e))?;
 
-    if !output.status.success() {
-        return Err("グローバルIP取得失敗".to_string());
-    }
+    // 失敗時はTLS証明書検証を無視してフォールバック
+    let json_str = if output.status.success() {
+        String::from_utf8_lossy(&output.stdout).to_string()
+    } else {
+        // 2回目: TLS証明書検証を無視して接続を試みる
+        let fallback_output = Command::new("curl.exe")
+            .args(&["-s", "-k", "-m", &timeout_secs.to_string(), url])
+            .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .output()
+            .map_err(|e| format!("curl実行失敗(フォールバック): {}", e))?;
 
-    let json_str = String::from_utf8_lossy(&output.stdout);
+        if !fallback_output.status.success() {
+            return Err("グローバルIP取得失敗（TLS検証有無両方失敗）".to_string());
+        }
+
+        String::from_utf8_lossy(&fallback_output.stdout).to_string()
+    };
+
     let body: IpResponse = serde_json::from_str(&json_str)
         .map_err(|e| format!("JSON解析失敗: {}", e))?;
 
