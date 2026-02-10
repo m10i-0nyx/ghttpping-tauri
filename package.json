@@ -6,7 +6,7 @@
     "scripts": {
         "dev": "tauri dev",
         "build": "tsc && vite build",
-        "tauri-build": "tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc",
+        "tauri-build": "tauri build --target x86_64-pc-windows-msvc",
         "preview": "vite preview",
         "tauri": "tauri"
     },

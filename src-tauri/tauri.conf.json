@@ -25,9 +25,8 @@
     },
     "bundle": {
         "publisher": "MINETA \"m10i\" Hiroki",
-        "active": true,
+        "active": false,
         "targets": [
-            "nsis",
             "msi"
         ],
         "icon": [

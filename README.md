@@ -2,6 +2,8 @@
 
 Windows上でHTTP/HTTPSの疎通確認および遅延測定を行うGUIアプリケーションです。
 
+[![Build and Release the Windows version of the Tauri app](https://github.com/m10i-0nyx/ghttpping-tauri/actions/workflows/build-windows-app.yaml/badge.svg?branch=main)](https://github.com/m10i-0nyx/ghttpping-tauri/actions/workflows/build-windows-app.yaml)
+
 ## 特徴
 
 - ✅ **環境チェック** - ネットワークアダプタ情報、IPv4/IPv6接続状況、DNS解決、インターネット接続確認

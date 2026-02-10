@@ -1,0 +1,88 @@
+name: Build and Release the Windows version of the Tauri app
+
+on:
+  push:
+    tags:
+      - 'v*.*.*' # vA.B.C 形式のタグが push されたとき
+
+jobs:
+  build-and-release-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write    # Release 作成・アセットアップロードに必要
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+
+      # タグからバージョン文字列を取り出して環境変数にする
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          # 例: refs/tags/v1.2.3 -> v1.2.3
+          RAW_TAG="${GITHUB_REF_NAME}"
+          echo "RAW_TAG=${RAW_TAG}"
+
+          # 先頭の v を削る (v1.2.3 -> 1.2.3)
+          VERSION="${RAW_TAG#v}"
+          echo "VERSION=${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # package.json の version を書き換え
+      - name: Update package.json version
+        run: |
+          node -e "const fs=require('fs');const f='package.json';const j=JSON.parse(fs.readFileSync(f,'utf8'));j.version='${{ steps.version.outputs.version }}';fs.writeFileSync(f,JSON.stringify(j,null,2));"
+
+      # src-tauri/tauri.conf.json の version を書き換え
+      - name: Update tauri.conf.json version
+        run: |
+          node -e "const fs=require('fs');const path='src-tauri/tauri.conf.json';const v='${{ steps.version.outputs.version }}';const j=JSON.parse(fs.readFileSync(path,'utf8'));j.version=v;fs.writeFileSync(path,JSON.stringify(j,null,2));"
+
+      # src-tauri/Cargo.toml の version を書き換え
+      - name: Update Cargo.toml version
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # [package] セクションの version 行だけを置き換える
+          sed -i 's/^version = "[0-9]\+\.[0-9]\+\.[0-9]\+"/version = "'"$VERSION"'"/' src-tauri/Cargo.toml
+
+      - name: Install dependencies (pnpm)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri (Windows, pnpm)
+        run: pnpm tauri build
+        # もし scripts.tauri がないなら:
+        # run: pnpm dlx @tauri-apps/cli build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            Tauri Windows build for ${{ github.ref_name }}.
+            See assets to download the installer/binary.
+          draft: false
+          prerelease: false
+          files: |
+            src-tauri/target/release/ghttpping-tauri.exe
+          includeUpdaterJson: false
+          target: 'x86_64-pc-windows-msvc'         # Windows x64
+          includeDebug: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -587,6 +587,7 @@ async fn get_dns_servers_async() -> Result<Vec<DnsServerInfo>, String> {
 }
 
 // DNS サーバ情報の取得（互換性のための同期版）
+#[allow(dead_code)]
 fn get_dns_servers() -> Result<Vec<DnsServerInfo>, String> {
     // ipconfig /all を優先的に使用（最も確実）
     match parse_dns_from_ipconfig() {
