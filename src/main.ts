@@ -41,6 +41,7 @@ interface HttpPingResult {
     response_time_ms?: number;
     success: boolean;
     error_message?: string;
+    verbose_log?: string;
 }
 
 interface DnsResolution {
@@ -265,6 +266,7 @@ async function performHttpPing() {
         const result = (await invoke("ping_http_dual", {
             url,
             ignoreTlsErrors,
+            saveVerboseLog: false,
         })) as HttpPingDualResult;
 
         lastPingDualResult = result;
