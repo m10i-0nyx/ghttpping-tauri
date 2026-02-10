@@ -171,104 +171,6 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
 }
 
 #[tauri::command]
-async fn ping_http(
-    url: String,
-    ignore_tls_errors: bool,
-) -> Result<HttpPingResult, String> {
-    if ignore_tls_errors {
-        log_security_warning("TLS証明書検証が無効化されています");
-    }
-
-    validate_url(&url)?;
-
-    let start = Instant::now();
-
-    // curl.exeを使用してHTTP接続
-    let mut cmd_args = vec![
-        "-s".to_string(),
-        "-o".to_string(),
-        "nul".to_string(),
-        "-w".to_string(),
-        "%{http_code}".to_string(),
-        "-m".to_string(),
-        "30".to_string(),
-    ];
-
-    if ignore_tls_errors {
-        cmd_args.push("-k".to_string());
-    }
-
-    cmd_args.push(url.clone());
-
-    #[cfg(target_os = "windows")]
-    let output = Command::new("curl.exe")
-        .args(&cmd_args)
-        .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output();
-
-    let elapsed = start.elapsed().as_millis() as u64;
-
-    match output {
-        Ok(output) => {
-            let status_code_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let stderr_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-            if output.status.success() && !status_code_str.is_empty() {
-                if let Ok(status_code) = status_code_str.parse::<u16>() {
-                    let success = status_code >= 200 && status_code < 300;
-                    Ok(HttpPingResult {
-                        url,
-                        ip_address: None,
-                        status_code: Some(status_code),
-                        response_time_ms: Some(elapsed),
-                        success,
-                        error_message: if success {
-                            None
-                        } else {
-                            Some(format!("HTTPステータス: {}", status_code))
-                        },
-                    })
-                } else {
-                    Ok(HttpPingResult {
-                        url,
-                        ip_address: None,
-                        status_code: None,
-                        response_time_ms: Some(elapsed),
-                        success: false,
-                        error_message: Some(format!("ステータスコード解析失敗: {}", status_code_str)),
-                    })
-                }
-            } else {
-                let error_msg = if !stderr_str.is_empty() {
-                    stderr_str
-                } else {
-                    format!("curl 終了コード: {}", output.status.code().unwrap_or(-1))
-                };
-
-                Ok(HttpPingResult {
-                    url,
-                    ip_address: None,
-                    status_code: None,
-                    response_time_ms: Some(elapsed),
-                    success: false,
-                    error_message: Some(format!("接続エラー: {}", error_msg)),
-                })
-            }
-        }
-        Err(e) => Ok(HttpPingResult {
-            url,
-            ip_address: None,
-            status_code: None,
-            response_time_ms: Some(elapsed),
-            success: false,
-            error_message: Some(format!("curl 実行失敗: {}", e)),
-        }),
-    }
-}
-
-#[tauri::command]
 async fn ping_http_dual(
     url: String,
     ignore_tls_errors: bool,
@@ -425,7 +327,7 @@ async fn perform_curl_request(
         "-w".to_string(),
         "%{http_code}".to_string(),
         "-m".to_string(),
-        "30".to_string(),
+        "10".to_string(),
     ];
 
     if ignore_tls_errors {
@@ -994,7 +896,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![environment_check, ping_http, ping_http_dual])
+        .invoke_handler(tauri::generate_handler![environment_check, ping_http_dual])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
