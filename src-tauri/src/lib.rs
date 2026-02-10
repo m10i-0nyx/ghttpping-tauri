@@ -330,24 +330,23 @@ async fn perform_curl_request(
         resolve_arg,
     ];
 
-    // verbose ログを保存する場合は -v オプションを追加、否則 -s オプションを追加
+    // verbose ログを保存する場合は --verbose オプションを追加
     if save_verbose_log {
-        cmd_args.push("-v".to_string());
-    } else {
-        cmd_args.push("-s".to_string());
+        cmd_args.push("--verbose".to_string());
     }
 
     cmd_args.extend(vec![
-        "-o".to_string(),
+        "--silent".to_string(),
+        "--output".to_string(),
         "nul".to_string(),
-        "-w".to_string(),
+        "--write-out".to_string(),
         "%{http_code}".to_string(),
-        "-m".to_string(),
+        "--max-time".to_string(),
         "10".to_string(),
     ]);
 
     if ignore_tls_errors {
-        cmd_args.push("-k".to_string());
+        cmd_args.push("--insecure".to_string());
     }
 
     cmd_args.push(original_url.to_string());
@@ -520,12 +519,12 @@ fn is_global_ipv6(ip: &Ipv6Addr) -> bool {
 async fn check_connectivity(url: &str, timeout_secs: u64) -> Result<bool, String> {
     let output = Command::new("curl.exe")
         .args(&[
-            "-s",
-            "-o",
+            "--silent",
+            "--output",
             "nul",
-            "-w",
+            "--write-out",
             "%{http_code}",
-            "-m",
+            "--max-time",
             &timeout_secs.to_string(),
             url,
         ])
@@ -550,7 +549,7 @@ async fn check_connectivity(url: &str, timeout_secs: u64) -> Result<bool, String
 async fn fetch_global_ip_info(url: &str, timeout_secs: u64) -> Result<GlobalIPInfo, String> {
     // 1回目: 通常のTLS検証で接続を試みる
     let output = Command::new("curl.exe")
-        .args(&["-s", "-m", &timeout_secs.to_string(), url])
+        .args(&["--silent", "--max-time", &timeout_secs.to_string(), url])
         .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
@@ -563,7 +562,7 @@ async fn fetch_global_ip_info(url: &str, timeout_secs: u64) -> Result<GlobalIPIn
     } else {
         // 2回目: TLS証明書検証を無視して接続を試みる
         let fallback_output = Command::new("curl.exe")
-            .args(&["-s", "-k", "-m", &timeout_secs.to_string(), url])
+            .args(&["--silent", "--insecure", "--max-time", &timeout_secs.to_string(), url])
             .creation_flags(0x08000200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
             .stderr(Stdio::piped())
             .stdout(Stdio::piped())
