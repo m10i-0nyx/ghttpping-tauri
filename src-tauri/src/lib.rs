@@ -59,6 +59,7 @@ pub struct HttpPingResult {
     pub response_time_ms: Option<u64>,
     pub success: bool,
     pub error_message: Option<String>,
+    pub verbose_log: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -174,6 +175,7 @@ async fn environment_check() -> Result<EnvironmentCheckResult, String> {
 async fn ping_http_dual(
     url: String,
     ignore_tls_errors: bool,
+    save_verbose_log: bool,
 ) -> Result<HttpPingDualResult, String> {
     if ignore_tls_errors {
         log_security_warning("TLS証明書検証が無効化されています");
@@ -207,6 +209,7 @@ async fn ping_http_dual(
             host,
             ignore_tls_errors,
             parsed_url.port(),
+            save_verbose_log,
         ),
         connect_to_ip_with_host(
             url.clone(),
@@ -214,6 +217,7 @@ async fn ping_http_dual(
             host,
             ignore_tls_errors,
             parsed_url.port(),
+            save_verbose_log,
         ),
     );
 
@@ -272,6 +276,7 @@ async fn connect_to_ip_with_host(
     host: &str,
     ignore_tls_errors: bool,
     port: Option<u16>,
+    save_verbose_log: bool,
 ) -> HttpPingResult {
     // IPアドレスが存在しない場合
     if ip_addresses.is_empty() {
@@ -289,12 +294,13 @@ async fn connect_to_ip_with_host(
                     "IPv4アドレスが見つかりません".to_string()
                 }
             ),
+            verbose_log: None,
         };
     }
 
     // 最初のIPアドレスを使用して接続を試行
     let ip_address = &ip_addresses[0];
-    perform_curl_request(&original_url, ip_address, host, ignore_tls_errors, port).await
+    perform_curl_request(&original_url, ip_address, host, ignore_tls_errors, port, save_verbose_log).await
 }
 
 // curlを使用したHTTPリクエスト実行
@@ -304,6 +310,7 @@ async fn perform_curl_request(
     host: &str,
     ignore_tls_errors: bool,
     port: Option<u16>,
+    save_verbose_log: bool,
 ) -> HttpPingResult {
     let start = Instant::now();
 
@@ -321,14 +328,23 @@ async fn perform_curl_request(
     let mut cmd_args = vec![
         "--resolve".to_string(),
         resolve_arg,
-        "-s".to_string(),
+    ];
+
+    // verbose ログを保存する場合は -v オプションを追加、否則 -s オプションを追加
+    if save_verbose_log {
+        cmd_args.push("-v".to_string());
+    } else {
+        cmd_args.push("-s".to_string());
+    }
+
+    cmd_args.extend(vec![
         "-o".to_string(),
         "nul".to_string(),
         "-w".to_string(),
         "%{http_code}".to_string(),
         "-m".to_string(),
         "10".to_string(),
-    ];
+    ]);
 
     if ignore_tls_errors {
         cmd_args.push("-k".to_string());
@@ -348,7 +364,12 @@ async fn perform_curl_request(
     match output {
         Ok(output) => {
             let status_code_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let stderr_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let verbose_log_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let verbose_log = if !verbose_log_str.is_empty() {
+                Some(verbose_log_str.clone())
+            } else {
+                None
+            };
 
             if output.status.success() && !status_code_str.is_empty() {
                 if let Ok(status_code) = status_code_str.parse::<u16>() {
@@ -364,6 +385,7 @@ async fn perform_curl_request(
                         } else {
                             Some(format!("HTTPステータス: {}", status_code))
                         },
+                        verbose_log,
                     }
                 } else {
                     HttpPingResult {
@@ -373,11 +395,12 @@ async fn perform_curl_request(
                         response_time_ms: Some(elapsed),
                         success: false,
                         error_message: Some(format!("ステータスコード解析失敗: {}", status_code_str)),
+                        verbose_log,
                     }
                 }
             } else {
-                let error_msg = if !stderr_str.is_empty() {
-                    stderr_str
+                let error_msg = if !verbose_log_str.is_empty() {
+                    verbose_log_str.clone()
                 } else {
                     format!("curl 終了コード: {}", output.status.code().unwrap_or(-1))
                 };
@@ -389,6 +412,7 @@ async fn perform_curl_request(
                     response_time_ms: Some(elapsed),
                     success: false,
                     error_message: Some(format!("接続エラー: {}", error_msg)),
+                    verbose_log,
                 }
             }
         }
@@ -399,6 +423,7 @@ async fn perform_curl_request(
             response_time_ms: Some(elapsed),
             success: false,
             error_message: Some(format!("curl 実行失敗: {}", e)),
+            verbose_log: None,
         },
     }
 }
